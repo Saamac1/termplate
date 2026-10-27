@@ -1276,3 +1276,71 @@ fn stop_cancels_a_running_command() {
     e.poll_jobs(&mut h);
     assert_eq!(e.log_lines("LOG"), ["SERVE cancelled"]);
 }
+
+// ----- background evaluation of panels and menus (spec §5, §7) ----------------
+
+fn async_app() -> (Engine, TestHost) {
+    let mut host = TestHost::new();
+    host.async_eval = true;
+    host.outputs.insert("$(date)".into(), "Tue".into());
+    let mut e = Engine::new(model(), Mode::App);
+    e.set_size(60, 12);
+    e.start_app(&mut host).unwrap();
+    (e, host)
+}
+
+#[test]
+fn panel_values_arrive_in_the_background() {
+    let (mut e, mut h) = async_app();
+    assert_eq!(h.evals.len(), 2, "STATUS and MAIN_MENU queued: {:?}", h.evals.iter().map(|x| x.0).collect::<Vec<_>>());
+    assert!(!screen(&mut e).contains("Tue"), "not yet");
+    assert!(e.has_jobs(), "the loop keeps polling");
+    h.finish_evals();
+    e.poll_jobs(&mut h);
+    assert!(screen(&mut e).contains("Tue"));
+    assert!(!e.has_jobs());
+}
+
+#[test]
+fn a_running_evaluation_is_not_started_again() {
+    let (mut e, mut h) = async_app();
+    let queued = h.evals.len();
+    e.tick(&mut h, Instant::now() + Duration::from_secs(5));
+    e.tick(&mut h, Instant::now() + Duration::from_secs(10));
+    assert_eq!(h.evals.len(), queued, "refresh skipped while pending");
+    assert_eq!(e.next_refresh(), None, "a pending panel does not make the loop spin");
+}
+
+#[test]
+fn a_change_during_evaluation_evaluates_again_afterwards() {
+    let (mut e, mut h) = async_app();
+    e.set_var("USED", Value::Number(90.0));
+    e.tick(&mut h, Instant::now());
+    let queued = h.evals.len();
+    h.finish_evals();
+    e.poll_jobs(&mut h);
+    assert_eq!(h.evals.len(), 2, "stale STATUS and MAIN_MENU asked again (was {queued})");
+    h.finish_evals();
+    e.poll_jobs(&mut h);
+    assert!(h.evals.is_empty(), "results alone do not start another round");
+}
+
+#[test]
+fn layout_menu_shows_loading_until_its_first_result() {
+    let (mut e, mut h) = async_app();
+    let s = screen(&mut e);
+    assert!(s.contains('…') && !s.contains("Varmuuskopioi"), "{s}");
+    h.finish_evals();
+    e.poll_jobs(&mut h);
+    assert!(screen(&mut e).contains("Varmuuskopioi"));
+}
+
+#[test]
+fn opening_a_menu_evaluates_it_at_once() {
+    let (mut e, mut h) = async_app();
+    e.set_var("FILES", Value::List(vec!["a.log".into()]));
+    h.finish_evals();
+    e.poll_jobs(&mut h);
+    e.perform_named(&mut h, "open FILE_LIST");
+    assert_eq!(e.menu_state("FILE_LIST").unwrap().total(), 1, "rows before the first draw");
+}

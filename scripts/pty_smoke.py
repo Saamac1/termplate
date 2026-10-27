@@ -36,6 +36,32 @@ log LOG history 50
 """
 
 
+SLOW_PANEL_APP = """app SLOWPANEL
+- termplate 0.1
+
+layout MAIN
+ppmm
+
+legend:
+- p CLOCK
+- m MAIN_MENU
+
+panel CLOCK refresh 1s
+vvvvvvvvvv
+
+legend:
+- v value $(sleep 2; echo ticked)
+
+menu MAIN_MENU
+- FIRST open OTHER
+- SECOND open OTHER
+- QUIT quit
+
+menu OTHER
+- BACK back
+"""
+
+
 def spawn(args, cwd=None):
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 70, 0, 0))
@@ -129,6 +155,21 @@ def main():
         time.sleep(0.2)
         left = subprocess.run(["pgrep", "-f", "echo started; sleep 5"], capture_output=True).stdout
         ok &= check("quit stops running commands", code == 0 and not left, (code, left))
+
+        # a slow panel value does not hold up drawing or keys
+        app = os.path.join(d, "slowpanel.termplate")
+        with open(app, "w") as f:
+            f.write(SLOW_PANEL_APP)
+        p, tty, screen = spawn(["run", app], cwd=d)
+        ok &= check("drawn before the slow panel value", b"SECOND" in screen and b"ticked" not in screen, bytes(screen[-300:]))
+        os.write(tty, b"j"); time.sleep(0.3)
+        os.write(tty, b"\r"); time.sleep(0.2)
+        ok &= check("keys work while the panel waits", b"BACK" in screen and b"ticked" not in screen, bytes(screen[-300:]))
+        time.sleep(2.0)
+        ok &= check("panel value arrives", b"ticked" in screen, bytes(screen[-300:]))
+        os.write(tty, b"\x11")
+        code, _, _ = finish(p)
+        ok &= check("quit with a panel evaluation running", code == 0, code)
     sys.exit(0 if ok else 1)
 
 

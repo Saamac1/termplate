@@ -89,6 +89,93 @@ impl<'a> Scope<'a> {
     }
 }
 
+/// A [`Scope`] that owns its values, for evaluation on another thread.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OwnedScope {
+    pub vars: Vars,
+    pub params: BTreeMap<String, String>,
+    pub it: Option<String>,
+    pub value: Option<String>,
+}
+
+impl OwnedScope {
+    pub fn of(scope: &Scope) -> Self {
+        OwnedScope {
+            vars: scope.vars.cloned().unwrap_or_default(),
+            params: scope.params.cloned().unwrap_or_default(),
+            it: scope.it.clone(),
+            value: scope.value.clone(),
+        }
+    }
+
+    pub fn scope(&self) -> Scope<'_> {
+        Scope { vars: Some(&self.vars), params: Some(&self.params), it: self.it.clone(), value: self.value.clone() }
+    }
+}
+
+/// Expressions a menu or panel needs, evaluated together (spec §5, §7).
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalRequest {
+    /// Each expression in order.
+    Batch(Vec<(Expr, ExprKind)>),
+    /// A list menu: the source, then `each` for every item with `$it` set.
+    Rows { source: Expr, each: Vec<(Expr, ExprKind)> },
+}
+
+impl EvalRequest {
+    pub fn exprs(&self) -> Box<dyn Iterator<Item = (&Expr, ExprKind)> + '_> {
+        match self {
+            EvalRequest::Batch(v) => Box::new(v.iter().map(|(e, k)| (e, *k))),
+            EvalRequest::Rows { source, each } => {
+                Box::new(std::iter::once((source, ExprKind::Source)).chain(each.iter().map(|(e, k)| (e, *k))))
+            }
+        }
+    }
+}
+
+/// One evaluated expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Evaluated {
+    Value(Value),
+    Cond(bool),
+    Source(Vec<Value>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalResults {
+    Batch(Vec<Evaluated>),
+    /// Each source item with the results of `each`.
+    Rows(Vec<(String, Vec<Evaluated>)>),
+}
+
+fn eval_one(host: &mut dyn Host, e: &Expr, kind: ExprKind, scope: &Scope) -> Evaluated {
+    match kind {
+        ExprKind::Value => Evaluated::Value(host.eval_value(e, scope)),
+        ExprKind::Cond => Evaluated::Cond(host.eval_cond(e, scope)),
+        ExprKind::Source => Evaluated::Source(host.eval_source(e, scope)),
+    }
+}
+
+/// Evaluates `req` here and now; what [`Host::eval_async`] does elsewhere.
+pub fn eval_now(host: &mut dyn Host, req: &EvalRequest, scope: &Scope) -> EvalResults {
+    match req {
+        EvalRequest::Batch(items) => EvalResults::Batch(items.iter().map(|(e, k)| eval_one(host, e, *k, scope)).collect()),
+        EvalRequest::Rows { source, each } => {
+            let items: Vec<String> = host.eval_source(source, scope).iter().map(Value::to_text).collect();
+            EvalResults::Rows(
+                items
+                    .into_iter()
+                    .map(|it| {
+                        let row_scope = Scope { it: Some(it.clone()), ..scope.clone() };
+                        let r = each.iter().map(|(e, k)| eval_one(host, e, *k, &row_scope)).collect();
+                        (it, r)
+                    })
+                    .collect(),
+            )
+        }
+    }
+}
+
 /// A fully resolved command run.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RunRequest {
@@ -125,6 +212,8 @@ pub enum JobEvent {
     /// The command ended. The output came earlier as `Line` events, so the
     /// outcome's `stdout` and `stderr` are empty.
     Done { job: JobId, outcome: Outcome },
+    /// Results of [`Host::eval_async`].
+    Evaluated { job: JobId, results: EvalResults },
 }
 
 pub trait Host {
@@ -147,6 +236,13 @@ pub trait Host {
     /// Asks a background command to stop (SIGTERM, then SIGKILL). It still
     /// ends with a `Done` event.
     fn cancel(&mut self, _job: JobId) {}
+
+    /// Evaluates `req` in the background when that is worth it (it runs
+    /// commands); the results come from [`Host::poll_jobs`]. `None` means
+    /// the engine evaluates it at once with [`eval_now`].
+    fn eval_async(&mut self, _req: &EvalRequest, _scope: &Scope) -> Option<JobId> {
+        None
+    }
 
     /// Completions of a typed path for `path` inputs (spec §8): whole
     /// paths starting with `prefix`, directories ending in `/`, sorted.
@@ -173,6 +269,10 @@ pub struct TestHost {
     pub events: Vec<JobEvent>,
     /// Paths offered by `complete_path`.
     pub paths: Vec<String>,
+    /// With `async_eval`, `eval_async` queues requests until
+    /// [`TestHost::finish_evals`].
+    pub async_eval: bool,
+    pub evals: Vec<(JobId, EvalRequest, OwnedScope)>,
 }
 
 impl TestHost {
@@ -193,6 +293,14 @@ impl TestHost {
         }
         let status = if self.cancelled.contains(&job) { 143 } else { out.status };
         self.events.push(JobEvent::Done { job, outcome: Outcome { status, timed_out: out.timed_out, ..Default::default() } });
+    }
+
+    /// Answers the queued `eval_async` requests.
+    pub fn finish_evals(&mut self) {
+        for (job, req, scope) in std::mem::take(&mut self.evals) {
+            let results = eval_now(self, &req, &scope.scope());
+            self.events.push(JobEvent::Evaluated { job, results });
+        }
     }
 
     /// The newest running job.
@@ -267,6 +375,15 @@ impl Host for TestHost {
 
     fn cancel(&mut self, job: JobId) {
         self.cancelled.push(job);
+    }
+
+    fn eval_async(&mut self, req: &EvalRequest, scope: &Scope) -> Option<JobId> {
+        if !self.async_eval {
+            return None;
+        }
+        let id = 1000 + self.evals.len() as JobId + self.runs.len() as JobId;
+        self.evals.push((id, req.clone(), OwnedScope::of(scope)));
+        Some(id)
     }
 
     fn complete_path(&mut self, prefix: &str) -> Vec<String> {

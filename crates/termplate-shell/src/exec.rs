@@ -26,6 +26,18 @@ pub trait CommandRunner {
     fn spawn(&mut self, _req: &RunRequest, _id: JobId, _events: Sender<JobEvent>, _cancel: Arc<AtomicBool>) -> bool {
         false
     }
+
+    /// A runner for another thread (background evaluation); `None` when
+    /// this one cannot be shared.
+    fn worker(&self) -> Option<Box<dyn CommandRunner + Send>> {
+        None
+    }
+}
+
+impl CommandRunner for Box<dyn CommandRunner + Send> {
+    fn run(&mut self, req: &RunRequest) -> Outcome {
+        (**self).run(req)
+    }
 }
 
 /// Called with `true` before an interactive command gets the terminal and
@@ -51,6 +63,10 @@ impl CommandRunner for ProcessRunner {
             return out;
         }
         run_captured(req, self.kill_grace.unwrap_or(KILL_GRACE))
+    }
+
+    fn worker(&self) -> Option<Box<dyn CommandRunner + Send>> {
+        Some(Box::new(self.clone()))
     }
 
     fn spawn(&mut self, req: &RunRequest, id: JobId, events: Sender<JobEvent>, cancel: Arc<AtomicBool>) -> bool {
@@ -300,6 +316,7 @@ mod tests {
             match rx.recv_timeout(Duration::from_secs(5)).expect("job event") {
                 JobEvent::Line { text, stderr, .. } => lines.push((text, stderr)),
                 JobEvent::Done { outcome, .. } => return (lines, outcome),
+                e @ JobEvent::Evaluated { .. } => panic!("unexpected {e:?}"),
             }
         }
     }

@@ -254,7 +254,6 @@ Done in code:
 - **C15.** Text is measured in display columns (`unicode-width`); a wide character takes two cells. Wide characters in drawings give a load warning, and load warnings appear in the app's first log at start.
 
 Still open or not started:
-- Panel `$( … )` values still run synchronously, with a timeout.
 - Forms (C8), theme files (C17), rendering kept ANSI colours (B11), gamepad input with `gilrs` (C16).
 
 Examples (28.10.2026): `examples/filemanager` (Midnight Commander style) and `examples/ollamaplate` (Ollama server, models, chat). Both are run on a pseudo-terminal here. Engine additions they needed, now in the spec:
@@ -263,6 +262,6 @@ Examples (28.10.2026): `examples/filemanager` (Midnight Commander style) and `ex
 - inputs: `- then ACTION`, `- clear`, and an input in a layout area is edited in place;
 - `stop COMMAND` cancels a running command.
 
-Found while building Ollamaplate: panel and menu `$( … )` values still block the UI. `ollama ps` takes ~6 s when no server answers, so the example checks first with `curl`. Making panel values asynchronous is the next engine item.
+Background evaluation (28.10.2026): panel fields, menu conditions and list sources that contain `$( … )` are evaluated on a worker thread; plain `$NAME` values stay immediate. Old values stay until new ones arrive, a pending target is not started again (it is evaluated once more if something changed meanwhile), and a menu waiting for its first result shows `TERMPLATE.LOADING` (`…`). Opening a menu or panel still evaluates at once, because widget mode needs to know whether a list is empty. Ollamaplate with raw `ollama ps` and no server now draws at once instead of freezing for ~17 s; it keeps its `curl` check so its menus fill in faster.
 
-Tests: 344 in total, `cargo clippy --all-targets -D warnings` clean, `scripts/pty_smoke.py` (now also covers background commands, cancel and quit) passes on this Intel Mac. Linux was not run.
+Tests: 352 in total, `cargo clippy --all-targets -D warnings` clean, `scripts/pty_smoke.py` (now also covers background commands, cancel and quit) passes on this Intel Mac. Linux was not run.

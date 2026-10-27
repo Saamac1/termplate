@@ -21,7 +21,7 @@ pub mod token;
 pub mod value;
 
 pub use error::{LoadError, LoadErrors};
-pub use host::{Expr, ExprKind, Host, JobEvent, JobId, Outcome, RunRequest, Scope};
+pub use host::{eval_now, EvalRequest, EvalResults, Evaluated, Expr, ExprKind, Host, JobEvent, JobId, OwnedScope, Outcome, RunRequest, Scope};
 pub use model::Model;
 pub use value::Value;
 

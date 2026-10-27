@@ -171,7 +171,7 @@ menu FAILED context POPUP final
 - `hide when`, `disabled when`, `adjust`, pinoutuminen, `size` ja `context` kuten RLML:ssä.
 - `final` on valikon määre (ei kohdan): `back` ja `close` eivät sulje valikkoa, ja lataus tarkistaa, että valikosta pääsee pois jollakin kohdalla.
 - Tekstit: `<VALIKKO>.TITLE`, `<VALIKKO>.TEXT`, `<VALIKKO>.<KOHTA>`.
-- Ehdot arvioidaan, kun valikko avautuu, muuttuja muuttuu tai ajetaan `refresh`. Tiedostojärjestelmästä riippuvat ehdot (`ok $(test -d …)`) päivittyvät siis `refresh`-toiminnolla tai paneelin päivitysvälillä, eivät ajastimella.
+- Ehdot arvioidaan, kun valikko avautuu, muuttuja muuttuu, komento päättyy tai ajetaan `refresh` (komentoja sisältävät taustalla, luku 15). Tiedostojärjestelmästä riippuvat ehdot (`ok $(test -d …)`) päivittyvät siis `refresh`-toiminnolla tai paneelin päivitysvälillä, eivät ajastimella.
 
 #### 7.1 Listavalikot
 
@@ -346,7 +346,10 @@ done
   - `back` keskeyttää uusimman nykyisestä kontekstista (päällimmäisestä modaalista tai fokusoidusta alueesta) käynnistetyn komennon (SIGTERM ja aikarajan jälkeen SIGKILL). Pääasettelussa, jossa `back` ei muuten sulje mitään, se keskeyttää uusimman käynnissä olevan komennon. Kun keskeytettävää ei ole, `back` toimii tavalliseen tapaan.
   - Keskeytetty komento ei jatka ketjuaan (`into`, `then`, `on_error`); lokiin tai tulosteeseen tulee teksti `TERMPLATE.CANCELLED`.
   - Kun ohjelma päättyy, käynnissä olevat komennot keskeytetään.
-  - Paneelien `$( … )`-arvot lasketaan toistaiseksi edelleen odottaen, aikakatkaisulla (asetus `timeout`, oletus 10 s).
+  - **Taustalaskenta:** paneelien kentät, valikkojen ehdot ja listojen lähteet, joissa on `$( … )`, lasketaan taustalla aikakatkaisulla (asetus `timeout`, oletus 10 s). Pelkät `$NIMI`-arvot lasketaan heti.
+  - Kentät ja rivit näyttävät edelliset arvonsa, kunnes uudet valmistuvat. Ensimmäistä tulostaan odottava valikko näyttää tekstin `TERMPLATE.LOADING` (oletus `…`).
+  - Valikkoa tai paneelia, jonka laskenta on kesken, ei lasketa uudelleen; jos jokin muuttui sillä välin, se lasketaan kerran lisää, kun edellinen valmistuu.
+  - Valikon tai paneelin avaaminen (`open`, widget-tila) laskee arvot heti, koska widget-tila tarvitsee tiedon siitä, onko lista tyhjä.
   - Jokaisella komennolla on aikakatkaisu (`- timeout`, asetus `timeout`).
   - Erillinen pääteikkuna (`- window`) on mahdollinen myöhempi laajennus, ei osa versiota 0.1: sen paluuarvoa ja tulostetta ei saada luotettavasti takaisin.
 - Työhakemisto on sovellustiedoston kansio, ellei `app`-lohko toisin määrää.

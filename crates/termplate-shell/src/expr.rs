@@ -22,6 +22,11 @@ pub enum Part {
 pub struct Template(pub Vec<Part>);
 
 impl Template {
+    /// True when evaluating it runs a command (`$( … )`).
+    pub fn runs_commands(&self) -> bool {
+        self.0.iter().any(|p| matches!(p, Part::Cmd(_)))
+    }
+
     /// The variable name when the template is exactly one `$NAME`.
     pub fn single_var(&self) -> Option<&str> {
         match self.0.as_slice() {
@@ -49,6 +54,19 @@ pub enum Cond {
     Cmp(Template, Op, Template),
     Truthy(Template),
     Ok(String),
+}
+
+impl Cond {
+    /// True when evaluating it runs a command (`ok $( … )`, `$( … )`).
+    pub fn runs_commands(&self) -> bool {
+        match self {
+            Cond::Or(v) | Cond::And(v) => v.iter().any(Cond::runs_commands),
+            Cond::Not(c) => c.runs_commands(),
+            Cond::Cmp(a, _, b) => a.runs_commands() || b.runs_commands(),
+            Cond::Truthy(t) => t.runs_commands(),
+            Cond::Ok(_) => true,
+        }
+    }
 }
 
 fn is_name_start(c: char) -> bool {

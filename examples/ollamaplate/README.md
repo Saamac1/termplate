@@ -28,5 +28,6 @@ Files:
   `$TMPDIR/ollamaplate-history.json` and prints the reply wrapped at
   `CHAT_WIDTH` columns, so the chat log can show it line by line.
 - `ollama.sh` answers the menus and the panel. It checks first that a
-  server answers, because `ollama list` and `ollama ps` retry for seconds
-  when none does, and Termplate still waits for panel values.
+  server answers, because `ollama list` and `ollama ps` retry for about
+  six seconds when none does. Termplate evaluates them in the background,
+  so the UI would not freeze, but the menus would show `…` that long.

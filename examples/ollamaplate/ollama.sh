@@ -1,7 +1,7 @@
 #!/bin/sh
-# Quick queries for Ollamaplate's menus and panels. They run while the UI
-# waits, so they first check that a server answers: `ollama list` and
-# `ollama ps` retry for several seconds when none does.
+# Quick queries for Ollamaplate's menus and panels. They first check that
+# a server answers: `ollama list` and `ollama ps` retry for about six
+# seconds when none does, and the menus would show `…` meanwhile.
 
 host=${OLLAMA_HOST:-127.0.0.1:11434}
 case "$host" in

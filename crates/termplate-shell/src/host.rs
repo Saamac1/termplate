@@ -6,7 +6,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
-use termplate_core::{Expr, ExprKind, Host, JobEvent, JobId, Outcome, RunRequest, Scope, Value};
+use termplate_core::{eval_now, EvalRequest, Expr, ExprKind, Host, JobEvent, JobId, OwnedScope, Outcome, RunRequest, Scope, Value};
 
 use crate::exec::CommandRunner;
 use crate::expr::{compare, parse_cond, parse_template, Cond, Part, Template};
@@ -74,6 +74,15 @@ impl<R: CommandRunner> ShellHost<R> {
             workdir: self.workdir.clone(),
         };
         self.runner.run(&req)
+    }
+
+    /// True when evaluating `expr` runs a command, so it is worth doing in
+    /// the background.
+    fn runs_commands(&mut self, expr: &Expr, kind: ExprKind) -> bool {
+        match kind {
+            ExprKind::Cond => self.cond(&expr.src).is_some_and(|c| c.runs_commands()),
+            ExprKind::Value | ExprKind::Source => self.template(&expr.src).runs_commands(),
+        }
     }
 
     fn lookup(name: &str, scope: &Scope) -> Value {
@@ -181,6 +190,27 @@ impl<R: CommandRunner> Host for ShellHost<R> {
         if let Some(c) = self.jobs.get(&job) {
             c.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// Evaluates on a thread of its own when the request runs commands;
+    /// plain `$NAME` lookups stay here (they are instant).
+    fn eval_async(&mut self, req: &EvalRequest, scope: &Scope) -> Option<JobId> {
+        let exprs: Vec<(Expr, ExprKind)> = req.exprs().map(|(e, k)| (e.clone(), k)).collect();
+        if !exprs.iter().any(|(e, k)| self.runs_commands(e, *k)) {
+            return None;
+        }
+        let mut worker = ShellHost::new(self.runner.worker()?);
+        worker.subst_timeout = self.subst_timeout;
+        worker.workdir = self.workdir.clone();
+        worker.cache = self.cache.clone();
+        let id = self.next_job;
+        self.next_job += 1;
+        let (req, scope, events) = (req.clone(), OwnedScope::of(scope), self.events.0.clone());
+        std::thread::spawn(move || {
+            let results = eval_now(&mut worker, &req, &scope.scope());
+            let _ = events.send(JobEvent::Evaluated { job: id, results });
+        });
+        Some(id)
     }
 
     fn complete_path(&mut self, prefix: &str) -> Vec<String> {
@@ -301,5 +331,62 @@ mod tests {
         assert_eq!(h.eval_value(&e("$(printf '%s' \"$TARGET\")"), &s), Value::Text("/mnt/backup".into()));
         assert!(h.eval_cond(&e("ok $(test \"$LEVEL\" = 3)"), &s));
         assert!(!h.eval_cond(&e("ok $(test -d /definitely/not/here)"), &s));
+    }
+
+    fn wait_eval(h: &mut ShellHost<ProcessRunner>) -> termplate_core::EvalResults {
+        let t = std::time::Instant::now();
+        loop {
+            for e in h.poll_jobs() {
+                if let JobEvent::Evaluated { results, .. } = e {
+                    return results;
+                }
+            }
+            assert!(t.elapsed() < Duration::from_secs(5), "no result");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn commands_are_evaluated_in_the_background() {
+        use termplate_core::{EvalResults, Evaluated};
+        let v = vars();
+        let s = Scope::new(&v);
+        let mut h = ShellHost::new(ProcessRunner::default());
+        let req = EvalRequest::Batch(vec![
+            (e("$(sleep 0.3; printf '%s' \"$TARGET\")"), ExprKind::Value),
+            (e("$LEVEL"), ExprKind::Value),
+            (e("ok $(true)"), ExprKind::Cond),
+        ]);
+        let t = std::time::Instant::now();
+        assert!(h.eval_async(&req, &s).is_some());
+        assert!(t.elapsed() < Duration::from_millis(200), "returns before the command ends");
+        let expected = EvalResults::Batch(vec![
+            Evaluated::Value(Value::Text("/mnt/backup".into())),
+            Evaluated::Value(Value::Number(3.0)),
+            Evaluated::Cond(true),
+        ]);
+        assert_eq!(wait_eval(&mut h), expected);
+    }
+
+    #[test]
+    fn rows_are_evaluated_per_item() {
+        use termplate_core::{EvalResults, Evaluated};
+        let v = vars();
+        let s = Scope::new(&v);
+        let mut h = ShellHost::new(ProcessRunner::default());
+        let req = EvalRequest::Rows { source: e("$(printf 'a\\nb\\n')"), each: vec![(e("$(printf '%s!' \"$IT\")"), ExprKind::Value)] };
+        h.eval_async(&req, &s).unwrap();
+        let rows = |it: &str| (it.to_string(), vec![Evaluated::Value(Value::Text(format!("{it}!")))]);
+        assert_eq!(wait_eval(&mut h), EvalResults::Rows(vec![rows("a"), rows("b")]));
+    }
+
+    #[test]
+    fn plain_lookups_and_unshareable_runners_stay_synchronous() {
+        let v = vars();
+        let s = Scope::new(&v);
+        let plain = EvalRequest::Batch(vec![(e("$TARGET"), ExprKind::Value), (e("$LEVEL > 2"), ExprKind::Cond)]);
+        assert!(ShellHost::new(ProcessRunner::default()).eval_async(&plain, &s).is_none());
+        let cmd = EvalRequest::Batch(vec![(e("$(date)"), ExprKind::Value)]);
+        assert!(ShellHost::new(Fake::default()).eval_async(&cmd, &s).is_none(), "Fake has no worker");
     }
 }

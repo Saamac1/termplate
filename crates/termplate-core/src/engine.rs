@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::frame::{str_width, wrap, Frame, Role};
-use crate::host::{Host, JobEvent, JobId, Outcome, RunRequest, Scope};
+use crate::host::{eval_now, EvalRequest, EvalResults, Evaluated, Expr, ExprKind, Host, JobEvent, JobId, Outcome, RunRequest, Scope};
 use crate::keys::{Binding, KeyCode, Mods, Mouse, StackEntry, KEY_ACTIONS};
 use crate::layout::Rect;
 use crate::menu::{row_letter, MenuState, Row};
@@ -122,6 +122,7 @@ pub const BUILTIN_TEXTS: &[(&str, &str)] = &[
     ("TERMPLATE.TIMEOUT", "Command timed out"),
     ("TERMPLATE.FAILED", "Command failed with status {STATUS}"),
     ("TERMPLATE.EMPTY", "(empty)"),
+    ("TERMPLATE.LOADING", "…"),
     ("TERMPLATE.OUTPUT", "Output"),
     ("TERMPLATE.RUNNING", "{NAME} is already running"),
     ("TERMPLATE.CANCELLED", "{NAME} cancelled"),
@@ -172,6 +173,12 @@ pub struct Engine {
     jobs: Vec<Job>,
     /// The input a completion list fills in.
     completing: Option<String>,
+    /// Background evaluations: job → menu or panel.
+    evals: BTreeMap<JobId, String>,
+    /// Menus and panels being evaluated; true when they changed meanwhile.
+    pending: BTreeMap<String, bool>,
+    /// Menus and panels evaluated at least once.
+    loaded: BTreeSet<String>,
 }
 
 fn complete_menu() -> crate::model::MenuDef {
@@ -207,6 +214,27 @@ fn input_view(text: &str, cursor: usize, w: usize) -> (usize, usize) {
         start += 1;
     }
     (start, col(start, cursor))
+}
+
+fn next_value(r: &mut impl Iterator<Item = Evaluated>) -> Value {
+    match r.next() {
+        Some(Evaluated::Value(v)) => v,
+        Some(Evaluated::Cond(b)) => Value::Bool(b),
+        Some(Evaluated::Source(items)) => Value::List(items.iter().map(Value::to_text).collect()),
+        None => Value::Text(String::new()),
+    }
+}
+
+fn next_text(r: &mut impl Iterator<Item = Evaluated>) -> String {
+    next_value(r).to_text()
+}
+
+fn next_cond(r: &mut impl Iterator<Item = Evaluated>) -> bool {
+    match r.next() {
+        Some(Evaluated::Cond(b)) => b,
+        Some(Evaluated::Value(v)) => v.truthy(),
+        _ => false,
+    }
 }
 
 fn common_prefix(items: &[String]) -> String {
@@ -271,6 +299,9 @@ impl Engine {
             chain_depth: 0,
             jobs: Vec::new(),
             completing: None,
+            evals: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            loaded: BTreeSet::new(),
         }
     }
 
@@ -428,6 +459,9 @@ impl Engine {
             .into_iter()
             .filter(|p| {
                 let Some(every) = self.model.panels.get(p).and_then(|d| d.refresh) else { return false };
+                if self.pending.contains_key(p) {
+                    return false;
+                }
                 self.panel_refreshed.get(p).is_none_or(|t| now.duration_since(*t) >= every.mul_f64(factor))
             })
             .collect();
@@ -442,6 +476,7 @@ impl Engine {
         let factor = self.model.settings.refresh_factor.unwrap_or(1.0);
         self.visible_panels()
             .iter()
+            .filter(|p| !self.pending.contains_key(*p))
             .filter_map(|p| {
                 let every = self.model.panels.get(p)?.refresh?.mul_f64(factor);
                 let last = self.panel_refreshed.get(p)?;
@@ -500,7 +535,7 @@ impl Engine {
     /// True while background commands run; the event loop then polls
     /// [`Engine::poll_jobs`] often.
     pub fn has_jobs(&self) -> bool {
-        !self.jobs.is_empty()
+        !self.jobs.is_empty() || !self.evals.is_empty()
     }
 
     /// Takes output and completions of background commands from the host:
@@ -511,6 +546,7 @@ impl Engine {
         if events.is_empty() {
             return;
         }
+        let mut ended = false;
         for ev in events {
             match ev {
                 JobEvent::Line { job, text, stderr } => {
@@ -526,7 +562,16 @@ impl Engine {
                         }
                     }
                 }
+                JobEvent::Evaluated { job, results } => {
+                    let Some(name) = self.evals.remove(&job) else { continue };
+                    let stale = self.pending.remove(&name).unwrap_or(false);
+                    self.apply_results(&name, results);
+                    if stale {
+                        self.evaluate(host, &name, false);
+                    }
+                }
                 JobEvent::Done { job, outcome } => {
+                    ended = true;
                     let Some(pos) = self.jobs.iter().position(|j| j.id == job) else { continue };
                     let j = self.jobs.remove(pos);
                     let out = Outcome { stdout: j.stdout, stderr: j.stderr, ..outcome };
@@ -549,7 +594,11 @@ impl Engine {
                 }
             }
         }
-        self.dirty = true;
+        // A finished command may have changed what conditions and sources
+        // see; evaluation results alone do not start another round.
+        if ended {
+            self.dirty = true;
+        }
         self.update(host);
     }
 
@@ -559,6 +608,10 @@ impl Engine {
             j.cancelled = true;
             host.cancel(j.id);
         }
+        for id in std::mem::take(&mut self.evals).into_keys() {
+            host.cancel(id);
+        }
+        self.pending.clear();
     }
 
     /// The screen or layout area commands are started from: the top modal,
@@ -768,37 +821,99 @@ impl Engine {
         out
     }
 
-    fn eval_menu(&mut self, host: &mut dyn Host, name: &str) {
-        let Some(def) = self.model.menus.get(name).cloned() else { return };
+    /// Evaluates a menu or panel: at once when `now` (opening it) or when
+    /// the host cannot do it in the background, else in the background,
+    /// keeping the old values meanwhile (spec §5, §7). A target whose
+    /// evaluation is still running is not started again, but evaluated
+    /// once more when the running one ends.
+    fn evaluate(&mut self, host: &mut dyn Host, name: &str, now: bool) {
+        if let Some(stale) = self.pending.get_mut(name) {
+            *stale = true;
+            return;
+        }
+        let is_panel = self.model.panels.contains_key(name);
+        if is_panel {
+            self.bind_area_args(host, name);
+        }
+        let req = if is_panel { self.panel_request(name) } else { self.menu_request(name) };
+        let Some(req) = req else { return };
         let vars = self.public_vars();
         let params = self.params.get(name).cloned().unwrap_or_default();
-        let rows = match &def.kind {
+        let scope = Scope::new(&vars).with_params(&params);
+        if !now && let Some(id) = host.eval_async(&req, &scope) {
+            self.evals.insert(id, name.to_string());
+            self.pending.insert(name.to_string(), false);
+            return;
+        }
+        let results = eval_now(host, &req, &scope);
+        self.apply_results(name, results);
+    }
+
+    fn apply_results(&mut self, name: &str, results: EvalResults) {
+        if self.model.panels.contains_key(name) {
+            self.apply_panel(name, results);
+        } else {
+            self.apply_menu(name, results);
+        }
+        self.loaded.insert(name.to_string());
+    }
+
+    fn eval_menu(&mut self, host: &mut dyn Host, name: &str) {
+        self.evaluate(host, name, false);
+    }
+
+    /// The expressions of a menu: item conditions, or a list's source and
+    /// row expressions.
+    fn menu_request(&self, name: &str) -> Option<EvalRequest> {
+        let def = self.model.menus.get(name)?;
+        Some(match &def.kind {
             MenuKind::Static(items) => {
+                let mut v = Vec::new();
+                for it in items {
+                    v.extend(it.hide_when.iter().chain(&it.disabled_when).map(|e| (e.clone(), ExprKind::Cond)));
+                }
+                EvalRequest::Batch(v)
+            }
+            MenuKind::List(l) => {
+                let mut each: Vec<(Expr, ExprKind)> = l.row.iter().map(|(_, e)| (e.clone(), ExprKind::Value)).collect();
+                each.extend(l.sort.iter().map(|(e, _)| (e.clone(), ExprKind::Value)));
+                each.extend(l.hide_when.iter().chain(&l.disabled_when).map(|e| (e.clone(), ExprKind::Cond)));
+                EvalRequest::Rows { source: l.source.clone(), each }
+            }
+        })
+    }
+
+    /// Builds a menu's rows from the results of [`Engine::menu_request`].
+    fn apply_menu(&mut self, name: &str, results: EvalResults) {
+        let Some(def) = self.model.menus.get(name).cloned() else { return };
+        let params = self.params.get(name).cloned().unwrap_or_default();
+        let rows = match (&def.kind, results) {
+            (MenuKind::Static(items), EvalResults::Batch(r)) => {
+                let mut r = r.into_iter();
                 let mut rows = Vec::new();
                 for it in items {
-                    let scope = Scope::new(&vars).with_params(&params);
-                    if it.hide_when.as_ref().is_some_and(|e| host.eval_cond(e, &scope)) {
+                    let hidden = it.hide_when.is_some() && next_cond(&mut r);
+                    let disabled = it.disabled_when.is_some() && next_cond(&mut r);
+                    if hidden {
                         continue;
                     }
-                    let disabled = it.disabled_when.as_ref().is_some_and(|e| host.eval_cond(e, &scope));
                     let label = self.text(&format!("{name}.{}", it.key), &params);
                     rows.push(Row { key: it.key.clone(), label, columns: vec![], disabled });
                 }
                 rows
             }
-            MenuKind::List(l) => {
-                let scope = Scope::new(&vars).with_params(&params);
-                let items: Vec<String> = host.eval_source(&l.source, &scope).iter().map(Value::to_text).collect();
+            (MenuKind::List(l), EvalResults::Rows(items)) => {
                 let row_key = format!("{name}.ROW");
                 let mut rows: Vec<(Row, String)> = Vec::new();
-                for it in items {
-                    let scope = Scope::new(&vars).with_params(&params).with_it(it.clone());
-                    if l.hide_when.as_ref().is_some_and(|e| host.eval_cond(e, &scope)) {
+                for (it, r) in items {
+                    let mut r = r.into_iter();
+                    let values: Vec<(String, String)> = l.row.iter().map(|(n, _)| (n.clone(), next_text(&mut r))).collect();
+                    let sort_key = if l.sort.is_some() { next_text(&mut r) } else { String::new() };
+                    let hidden = l.hide_when.is_some() && next_cond(&mut r);
+                    let disabled = l.disabled_when.is_some() && next_cond(&mut r);
+                    if hidden {
                         continue;
                     }
-                    let disabled = l.disabled_when.as_ref().is_some_and(|e| host.eval_cond(e, &scope));
-                    let values: Vec<(String, String)> =
-                        l.row.iter().map(|(n, e)| (n.clone(), host.eval_value(e, &scope).to_text())).collect();
                     let columns: Vec<String> = l
                         .columns
                         .iter()
@@ -815,10 +930,6 @@ impl Engine {
                     } else {
                         values.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join("  ")
                     };
-                    let sort_key = match &l.sort {
-                        Some((e, _)) => host.eval_value(e, &scope).to_text(),
-                        None => String::new(),
-                    };
                     rows.push((Row { key: it, label, columns, disabled }, sort_key));
                 }
                 if let Some((_, desc)) = &l.sort {
@@ -829,44 +940,72 @@ impl Engine {
                 }
                 rows.into_iter().map(|(r, _)| r).collect()
             }
+            _ => return,
         };
         self.menus.entry(name.to_string()).or_default().set_rows(rows);
     }
 
     fn eval_panel(&mut self, host: &mut dyn Host, name: &str) {
-        let Some(def) = self.model.panels.get(name).cloned() else { return };
-        // Layout areas compute their arguments with the panel; a modal
-        // panel keeps the arguments it was opened with (M 7.7).
+        self.evaluate(host, name, false);
+    }
+
+    /// Layout areas compute their arguments with the panel; a modal panel
+    /// keeps the arguments it was opened with (M 7.7).
+    fn bind_area_args(&mut self, host: &mut dyn Host, name: &str) {
         if !self.screens.iter().any(|s| matches!(s, Screen::Panel(n) if n == name))
             && let Some(args) = self.area_args(name) {
                 let bound = self.bind_args(host, name, &args, None);
                 self.params.insert(name.to_string(), bound);
             }
-        let vars = self.public_vars();
+    }
+
+    /// The expressions of a panel's fields, in field order.
+    fn panel_request(&self, name: &str) -> Option<EvalRequest> {
+        let def = self.model.panels.get(name)?;
+        let mut v = Vec::new();
+        for f in &def.fields {
+            match &f.kind {
+                FieldKind::Text { params, .. } => v.extend(params.iter().map(|(_, e)| (e.clone(), ExprKind::Value))),
+                FieldKind::Value { expr } => v.push((expr.clone(), ExprKind::Value)),
+                FieldKind::Bar { value, max } => {
+                    v.push((value.clone(), ExprKind::Value));
+                    v.push((max.clone(), ExprKind::Value));
+                }
+                FieldKind::Spinner { when } => v.push((when.clone(), ExprKind::Cond)),
+                FieldKind::Param { .. } | FieldKind::Input { .. } => {}
+            }
+        }
+        Some(EvalRequest::Batch(v))
+    }
+
+    /// Field values from the results of [`Engine::panel_request`].
+    fn apply_panel(&mut self, name: &str, results: EvalResults) {
+        let Some(def) = self.model.panels.get(name).cloned() else { return };
+        let EvalResults::Batch(r) = results else { return };
+        let mut r = r.into_iter();
         let params = self.params.get(name).cloned().unwrap_or_default();
-        let scope = Scope::new(&vars).with_params(&params);
         let mut values = BTreeMap::new();
         for f in &def.fields {
             let v = match &f.kind {
                 FieldKind::Text { key, params: tp } => {
                     let mut extra = params.clone();
-                    for (n, e) in tp {
-                        extra.insert(n.clone(), host.eval_value(e, &scope).to_text());
+                    for (n, _) in tp {
+                        extra.insert(n.clone(), next_text(&mut r));
                     }
                     self.text(key, &extra)
                 }
-                FieldKind::Value { expr } => host.eval_value(expr, &scope).to_text(),
+                FieldKind::Value { .. } => next_text(&mut r),
                 FieldKind::Param { name } => params.get(name).cloned().unwrap_or_default(),
-                FieldKind::Bar { value, max } => {
-                    let v = host.eval_value(value, &scope).as_number().unwrap_or(0.0);
-                    let m = host.eval_value(max, &scope).as_number().unwrap_or(0.0);
+                FieldKind::Bar { .. } => {
+                    let v = next_value(&mut r).as_number().unwrap_or(0.0);
+                    let m = next_value(&mut r).as_number().unwrap_or(0.0);
                     format!("{} {}", format_number(v), format_number(m))
                 }
                 FieldKind::Input { input } => {
                     let var = self.model.inputs.get(input).map(|i| i.var.clone()).unwrap_or_default();
                     self.vars.get(&var).map(Value::to_text).unwrap_or_default()
                 }
-                FieldKind::Spinner { when } => host.eval_cond(when, &scope).to_string(),
+                FieldKind::Spinner { .. } => next_cond(&mut r).to_string(),
             };
             values.insert(f.name.clone(), v);
         }
@@ -893,7 +1032,8 @@ impl Engine {
         if self.model.menus.contains_key(target) {
             self.params.insert(target.to_string(), params);
             self.menus.insert(target.to_string(), MenuState::default());
-            self.eval_menu(host, target);
+            self.pending.remove(target);
+            self.evaluate(host, target, true);
             let empty = self.menus.get(target).is_some_and(|m| m.total() == 0);
             let is_list = matches!(self.model.menus.get(target).map(|m| &m.kind), Some(MenuKind::List(_)));
             if is_list && empty && !self.model.texts.has(&format!("{target}.EMPTY")) {
@@ -909,7 +1049,8 @@ impl Engine {
         } else if self.model.panels.contains_key(target) {
             self.params.insert(target.to_string(), params);
             self.screens.push(Screen::Panel(target.to_string()));
-            self.eval_panel(host, target);
+            self.pending.remove(target);
+            self.evaluate(host, target, true);
         } else if self.model.layouts.contains_key(target) {
             self.layout = Some(target.to_string());
             self.focus = self.focusables().first().copied().unwrap_or(0);
@@ -2009,7 +2150,14 @@ impl Engine {
         let state = state.clone();
         if state.is_empty() && rows_h > 0 {
             let key = format!("{name}.EMPTY");
-            let msg = if self.model.texts.has(&key) { self.text(&key, &BTreeMap::new()) } else { self.text("TERMPLATE.EMPTY", &BTreeMap::new()) };
+            let msg = if !self.loaded.contains(name) {
+                // the first evaluation is still running
+                self.text("TERMPLATE.LOADING", &BTreeMap::new())
+            } else if self.model.texts.has(&key) {
+                self.text(&key, &BTreeMap::new())
+            } else {
+                self.text("TERMPLATE.EMPTY", &BTreeMap::new())
+            };
             f.aligned(rect.x, y, rect.w, &msg, Align::Left, Role::Disabled);
         }
         let multi = list.as_ref().is_some_and(|l| l.multi);
