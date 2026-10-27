@@ -1,0 +1,5 @@
+vars
+- LEFT_DIR text "~"
+- RIGHT_DIR text "~"
+- HIDDEN bool false
+- NEW_NAME text

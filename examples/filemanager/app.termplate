@@ -1,0 +1,16 @@
+> Termplate File Manager: two directory panels in the style of Midnight
+> Commander. The logic lives in fm.sh; this file only describes the UI.
+>
+>   termplate run examples/filemanager/app.termplate
+>
+> The base key context is MENU, so the panels' own contexts (LEFT_PANEL,
+> RIGHT_PANEL) fall through to the default menu keys for moving around.
+
+app FILEMANAGER
+- termplate 0.1
+- layout MAIN
+- language en
+- keys MENU
+
+include ui/*
+include text/*

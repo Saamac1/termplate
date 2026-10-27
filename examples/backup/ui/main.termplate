@@ -1,0 +1,102 @@
+layout MAIN
+sssmm
+sssmm
+lllll
+
+legend:
+- s STATUS size.width 34
+- m MAIN_MENU
+- l LOG size.height 6
+
+layout MAIN.narrow when width < 60
+m
+l
+
+legend:
+- m MAIN_MENU
+- l LOG size.height 4
+
+panel STATUS refresh 2s
+TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+[disktxt_] [disk____________]
+[loadtxt_] [load____________]
+pppppppppppppppppppppppppppppp
+[target______________________]
+
+legend:
+- T text STATUS.TITLE center
+- disktxt text STATUS.DISK
+- loadtxt text STATUS.LOAD
+- disk value $(df -h / | awk 'NR==2 {print $4}')
+- load value $(uptime | sed 's/.*average[s]*: //' | cut -d, -f1)
+- p bar $USED of 100
+- target value $TARGET
+
+menu MAIN_MENU
+- BACKUP
+- RESTORE disabled when not ok $(test -d "$TARGET")
+- LOGS open LOGS
+- SETTINGS open SETTINGS
+- QUIT quit
+
+menu SETTINGS context POPUP
+- VERBOSE toggle VERBOSE
+- LEVEL adjust LEVEL 1..9
+- TARGET open TARGET_DIR
+- BACK back
+
+menu LOGS list
+- source $(ls /var/log 2>/dev/null | head -40)
+- row FILE: $it
+- sort $it
+- filter
+- then run "less -- \"/var/log/$IT\"" interactive
+- keep
+
+input TARGET_DIR
+- var TARGET
+- kind path
+- validate ok $(test -d "$VALUE")
+- error TARGET_DIR.INVALID
+
+command BACKUP
+- confirm BACKUP.CONFIRM
+- run ./backup.sh
+- env TARGET=$TARGET VERBOSE=$VERBOSE LEVEL=$LEVEL
+- output LOG
+- then set USED 100
+- on_error set USED 0
+
+command RESTORE
+- run echo "restoring from $TARGET"
+- env TARGET=$TARGET
+- output LOG
+
+log LOG history 500
+
+keys ALWAYS
+- quit ctrl+q
+
+keys MENU
+- confirm enter space
+- back esc
+- cursor.north k up
+- cursor.south j down
+
+keys MAIN
+- BACKUP b
+
+keys POPUP passthrough
+- back q esc
+
+colors
+- STONE 5a5a6e
+
+panels
+- STATUS border rounded
+- LOG border rounded fg grey
+- MENU.selected fg black bg cyan
+- POPUP border double
+
+logs
+- LOG.stderr fg red bold

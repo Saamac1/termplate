@@ -1,0 +1,28 @@
+> The server runs in the background and streams its log; `stop SERVE`
+> (or Esc in the ACTIONS menu) stops it. When the Ollama app already
+> runs a server, Start is disabled.
+
+> The access log lines ([GIN]) are left out: the panels ask every few
+> seconds.
+
+command SERVE
+- run ollama serve 2>&1 | grep -v --line-buffered '\[GIN\]'
+- output SERVER
+- then refresh
+- on_error refresh
+
+command ASK
+- run ./chat.py ask
+- env MODEL=$MODEL PROMPT=$PROMPT WIDTH=$CHAT_WIDTH
+- output CHAT
+- then refresh
+
+command NEW_CHAT
+- run ./chat.py reset
+- output CHAT
+
+command UNLOAD
+- run ollama stop "$MODEL"
+- env MODEL=$MODEL
+- output SERVER
+- then refresh

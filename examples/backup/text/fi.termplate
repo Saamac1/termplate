@@ -1,0 +1,22 @@
+text fi
+STATUS.TITLE Varmuuskopiointi
+STATUS.DISK Levy:
+STATUS.LOAD Kuorma:
+MAIN_MENU.TITLE Toiminnot
+MAIN_MENU.BACKUP Varmuuskopioi
+MAIN_MENU.RESTORE Palauta
+MAIN_MENU.LOGS Lokit
+MAIN_MENU.SETTINGS Asetukset
+MAIN_MENU.QUIT Lopeta
+SETTINGS.TITLE Asetukset
+SETTINGS.VERBOSE Tarkka tuloste: {VERBOSE}
+SETTINGS.LEVEL Pakkaustaso: {LEVEL}
+SETTINGS.TARGET Kohde: {TARGET}
+SETTINGS.BACK Takaisin
+LOGS.TITLE Lokit
+LOGS.ROW {FILE}
+LOGS.EMPTY Ei lokeja
+TARGET_DIR.TITLE Kohdehakemisto
+TARGET_DIR.PROMPT Anna hakemisto:
+TARGET_DIR.INVALID Hakemistoa ei ole
+BACKUP.CONFIRM Varmuuskopioidaanko kohteeseen {TARGET}?

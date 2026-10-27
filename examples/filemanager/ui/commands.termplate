@@ -1,0 +1,100 @@
+> Each panel has its own commands: they differ only in which directory is
+> the source and which the target.
+
+command LEFT_OPEN
+- run ./fm.sh open
+- env DIR=$LEFT_DIR
+- into LEFT_DIR
+- output OUTPUT
+
+command RIGHT_OPEN
+- run ./fm.sh open
+- env DIR=$RIGHT_DIR
+- into RIGHT_DIR
+- output OUTPUT
+
+command LEFT_VIEW
+- run ./fm.sh view interactive
+- env SRC=$LEFT_DIR
+
+command RIGHT_VIEW
+- run ./fm.sh view interactive
+- env SRC=$RIGHT_DIR
+
+command LEFT_EDIT
+- run ./fm.sh edit interactive
+- env SRC=$LEFT_DIR
+- then refresh
+
+command RIGHT_EDIT
+- run ./fm.sh edit interactive
+- env SRC=$RIGHT_DIR
+- then refresh
+
+command LEFT_COPY
+- confirm COPY.CONFIRM
+- run ./fm.sh copy
+- env SRC=$LEFT_DIR DST=$RIGHT_DIR
+- output OUTPUT
+- then refresh
+- on_error refresh
+
+command RIGHT_COPY
+- confirm COPY.CONFIRM
+- run ./fm.sh copy
+- env SRC=$RIGHT_DIR DST=$LEFT_DIR
+- output OUTPUT
+- then refresh
+- on_error refresh
+
+command LEFT_MOVE
+- confirm MOVE.CONFIRM
+- run ./fm.sh move
+- env SRC=$LEFT_DIR DST=$RIGHT_DIR
+- output OUTPUT
+- then refresh
+- on_error refresh
+
+command RIGHT_MOVE
+- confirm MOVE.CONFIRM
+- run ./fm.sh move
+- env SRC=$RIGHT_DIR DST=$LEFT_DIR
+- output OUTPUT
+- then refresh
+- on_error refresh
+
+command LEFT_DELETE
+- confirm DELETE.CONFIRM
+- run ./fm.sh delete
+- env SRC=$LEFT_DIR
+- output OUTPUT
+- then refresh
+
+command RIGHT_DELETE
+- confirm DELETE.CONFIRM
+- run ./fm.sh delete
+- env SRC=$RIGHT_DIR
+- output OUTPUT
+- then refresh
+
+> New directory: the input asks the name, then runs the command.
+
+input LEFT_NEW_DIR
+- var NEW_NAME
+- then LEFT_MKDIR
+
+input RIGHT_NEW_DIR
+- var NEW_NAME
+- then RIGHT_MKDIR
+
+command LEFT_MKDIR
+- run ./fm.sh mkdir
+- env SRC=$LEFT_DIR NAME=$NEW_NAME
+- output OUTPUT
+- then set NEW_NAME ""
+
+command RIGHT_MKDIR
+- run ./fm.sh mkdir
+- env SRC=$RIGHT_DIR NAME=$NEW_NAME
+- output OUTPUT
+- then set NEW_NAME ""

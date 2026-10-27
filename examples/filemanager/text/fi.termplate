@@ -1,0 +1,15 @@
+text fi
+LEFT.TITLE {LEFT_DIR}
+RIGHT.TITLE {RIGHT_DIR}
+KEYBAR.TEXT {^LEFT_VIEW} Näytä {^LEFT_EDIT} Muok. {^LEFT_COPY} Kopioi {^LEFT_MOVE} Siirrä {^open LEFT_NEW_DIR} Kansio {^LEFT_DELETE} Pois {^toggle HIDDEN} Piilo {^quit} Ulos
+COPY.CONFIRM Kopioi toiseen paneeliin: {IT}
+MOVE.CONFIRM Siirrä toiseen paneeliin: {IT}
+DELETE.CONFIRM Poista pysyvästi: {IT}
+LEFT_NEW_DIR.TITLE Uusi kansio
+LEFT_NEW_DIR.PROMPT Nimi:
+RIGHT_NEW_DIR.TITLE Uusi kansio
+RIGHT_NEW_DIR.PROMPT Nimi:
+TERMPLATE.CONFIRM_HINT {^confirm} OK  {^back} Peru
+TERMPLATE.FAILED Komento epäonnistui, paluuarvo {STATUS}
+TERMPLATE.CANCELLED {NAME} keskeytetty
+TERMPLATE.RUNNING {NAME} on jo käynnissä

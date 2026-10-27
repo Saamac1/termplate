@@ -1,0 +1,6 @@
+vars
+- TARGET text "/tmp"
+- VERBOSE bool false
+- LEVEL number 3 range 1..9
+- USED number 0
+- FILES list

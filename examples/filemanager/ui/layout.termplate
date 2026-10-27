@@ -1,0 +1,37 @@
+layout MAIN
+llllllllrrrrrrrr
+llllllllrrrrrrrr
+oooooooooooooooo
+kkkkkkkkkkkkkkkk
+
+legend:
+- l LEFT size.width 50%
+- r RIGHT
+- o OUTPUT size.height 6
+- k KEYBAR size.height 1
+
+panel KEYBAR
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+
+legend:
+- k text KEYBAR.TEXT
+
+log OUTPUT history 200
+
+> Directory panels: type to search, Insert marks rows, Enter opens a
+> directory. A key command gets the marked rows (or the row under the
+> cursor) as IT.
+
+menu LEFT list context LEFT_PANEL
+- source $(./fm.sh list "$LEFT_DIR")
+- filter
+- multi
+- keep
+- then LEFT_OPEN
+
+menu RIGHT list context RIGHT_PANEL
+- source $(./fm.sh list "$RIGHT_DIR")
+- filter
+- multi
+- keep
+- then RIGHT_OPEN

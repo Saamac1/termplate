@@ -1,0 +1,18 @@
+keys ALWAYS
+- quit ctrl+q
+- NEW_CHAT ctrl+n
+- refresh ctrl+r
+
+panels
+- ACTIONS border single
+- MODELS border single
+- PS border single
+- CHAT border rounded
+- SERVER border single fg grey
+- ASK_LINE border rounded
+- MENU.selected fg black bg cyan
+- KEYS fg black bg cyan
+
+logs
+- CHAT.stderr fg red
+- SERVER.stderr fg grey

@@ -1,0 +1,8 @@
+> Example from the Termplate spec draft (26.10.2026), sections 2-12.
+app BACKUPTOOL
+- termplate 0.1
+- layout MAIN
+- language fi
+
+include ui/*
+include text/*

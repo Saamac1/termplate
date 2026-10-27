@@ -1,0 +1,56 @@
+layout MAIN
+aaammmppppp
+ccccccccccc
+sssssssssss
+iiiiiiiiiii
+kkkkkkkkkkk
+
+legend:
+- a ACTIONS size 22x7
+- m MODELS size.width 30
+- p PS
+- c CHAT
+- s SERVER size.height 5
+- i ASK_LINE size.height 3
+- k KEYS size.height 1
+
+menu ACTIONS
+- SERVE disabled when ok $(./ollama.sh up)
+- STOP stop SERVE
+- NEW_CHAT
+- UNLOAD disabled when $MODEL == ""
+
+> The models `ollama list` knows; Enter chooses one for the chat.
+
+menu MODELS list
+- source $(./ollama.sh list)
+- filter
+- keep
+- then set MODEL $it
+
+> Loaded models: name, then size and where it runs.
+
+panel PS refresh 3s
+TTTTTTTTTTTTTTTTTTTTTTTTT
+ppppppppppppppppppppppppp
+ppppppppppppppppppppppppp
+ppppppppppppppppppppppppp
+ppppppppppppppppppppppppp
+
+legend:
+- T text PS.TITLE
+- p value $(./ollama.sh ps)
+
+panel KEYS
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+
+legend:
+- k text KEYS.TEXT
+
+log CHAT history 2000
+log SERVER history 500
+
+input ASK_LINE
+- var PROMPT
+- then ASK
+- clear

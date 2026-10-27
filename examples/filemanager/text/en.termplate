@@ -1,0 +1,11 @@
+text en
+LEFT.TITLE {LEFT_DIR}
+RIGHT.TITLE {RIGHT_DIR}
+KEYBAR.TEXT {^LEFT_VIEW} View  {^LEFT_EDIT} Edit  {^LEFT_COPY} Copy  {^LEFT_MOVE} Move  {^open LEFT_NEW_DIR} Mkdir  {^LEFT_DELETE} Del  {^toggle HIDDEN} Dots  {^quit} Quit
+COPY.CONFIRM Copy to the other panel: {IT}
+MOVE.CONFIRM Move to the other panel: {IT}
+DELETE.CONFIRM Delete for good: {IT}
+LEFT_NEW_DIR.TITLE New directory
+LEFT_NEW_DIR.PROMPT Name:
+RIGHT_NEW_DIR.TITLE New directory
+RIGHT_NEW_DIR.PROMPT Name:

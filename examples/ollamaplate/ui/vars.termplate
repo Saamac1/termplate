@@ -1,0 +1,4 @@
+vars
+- MODEL text
+- PROMPT text
+- CHAT_WIDTH number 60

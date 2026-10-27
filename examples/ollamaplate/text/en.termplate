@@ -1,0 +1,12 @@
+text en
+ACTIONS.TITLE Ollama
+ACTIONS.SERVE Start server
+ACTIONS.STOP Stop server
+ACTIONS.NEW_CHAT New chat
+ACTIONS.UNLOAD Unload {MODEL}
+MODELS.TITLE Model: {MODEL}
+MODELS.EMPTY No models. Is the server running?
+PS.TITLE Loaded
+KEYS.TEXT {^next_area} next area  F1-F5 jump  {^NEW_CHAT} new chat  {^refresh} refresh  {^quit} quit
+ASK_LINE.TITLE Ask
+ASK_LINE.PROMPT Ask:

@@ -1,0 +1,30 @@
+keys ALWAYS
+- quit f10 ctrl+q
+- toggle HIDDEN ctrl+t
+- refresh ctrl+r
+
+keys LEFT_PANEL
+- LEFT_VIEW f3
+- LEFT_EDIT f4
+- LEFT_COPY f5
+- LEFT_MOVE f6
+- open LEFT_NEW_DIR f7
+- LEFT_DELETE f8 delete
+
+keys RIGHT_PANEL
+- RIGHT_VIEW f3
+- RIGHT_EDIT f4
+- RIGHT_COPY f5
+- RIGHT_MOVE f6
+- open RIGHT_NEW_DIR f7
+- RIGHT_DELETE f8 delete
+
+panels
+- LEFT border single
+- RIGHT border single
+- OUTPUT border single fg grey
+- MENU.selected fg black bg cyan
+- KEYBAR fg black bg cyan
+
+logs
+- OUTPUT.stderr fg red

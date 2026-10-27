@@ -1,0 +1,13 @@
+> Ollamaplate: start the Ollama server, choose a model, see what is
+> loaded and chat. Needs `ollama` and python3 (chat.py uses only the
+> standard library).
+>
+>   termplate run examples/ollamaplate/app.termplate
+
+app OLLAMAPLATE
+- termplate 0.1
+- layout MAIN
+- language en
+
+include ui/*
+include text/*

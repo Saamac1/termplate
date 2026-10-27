@@ -1,0 +1,16 @@
+text fi
+ACTIONS.TITLE Ollama
+ACTIONS.SERVE Käynnistä palvelin
+ACTIONS.STOP Pysäytä palvelin
+ACTIONS.NEW_CHAT Uusi keskustelu
+ACTIONS.UNLOAD Poista muistista {MODEL}
+MODELS.TITLE Malli: {MODEL}
+MODELS.EMPTY Ei malleja. Onko palvelin käynnissä?
+PS.TITLE Ladattu
+KEYS.TEXT {^next_area} seuraava alue  F1-F5 hyppää  {^NEW_CHAT} uusi keskustelu  {^refresh} päivitä  {^quit} lopeta
+ASK_LINE.TITLE Kysy
+ASK_LINE.PROMPT Kysy:
+TERMPLATE.CONFIRM_HINT {^confirm} OK  {^back} Peru
+TERMPLATE.FAILED Komento epäonnistui, paluuarvo {STATUS}
+TERMPLATE.CANCELLED {NAME} keskeytetty
+TERMPLATE.RUNNING {NAME} on jo käynnissä
