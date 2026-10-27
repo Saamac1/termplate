@@ -149,10 +149,30 @@ pub struct PanelDef {
     pub name: String,
     pub params: Vec<Param>,
     pub refresh: Option<Duration>,
+    /// Runs after the form was submitted (`panel P then ACTION`, spec §8).
+    pub then: Option<Action>,
     pub picture: Vec<Vec<char>>,
     pub width: usize,
     pub height: usize,
     pub fields: Vec<FieldDef>,
+}
+
+impl PanelDef {
+    /// The inputs of a form, in field order (spec §8). A panel with input
+    /// fields is a form.
+    pub fn form_inputs(&self) -> Vec<String> {
+        self.fields
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FieldKind::Input { input } => Some(input.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn is_form(&self) -> bool {
+        self.fields.iter().any(|f| matches!(f.kind, FieldKind::Input { .. }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -890,14 +910,28 @@ fn split_align(item: &RawItem, from: usize) -> (usize, Align) {
 
 fn build_panel(bld: &mut Builder, b: &RawBlock) -> Option<PanelDef> {
     let mut refresh = None;
+    let mut then = None;
+    // The header as an item, so that `then ACTION` parses like a row.
+    let header = match RawItem::new(&b.file, b.line, b.namespace.clone(), &b.args_text) {
+        Ok(h) => h,
+        Err(e) => {
+            bld.err(e);
+            return None;
+        }
+    };
     let mut i = 0;
-    while i < b.args.len() {
-        match (b.args[i].text.as_str(), b.args.get(i + 1)) {
+    while i < header.tokens.len() {
+        match (header.tokens[i].text.as_str(), header.tokens.get(i + 1)) {
             ("refresh", Some(d)) => match parse_duration(&d.text) {
                 Some(d) => refresh = Some(d),
                 None => bld.err(b.err(format!("bad duration `{}` (e.g. 2s, 500ms, 1m)", d.text))),
             },
-            (w, _) => bld.err(b.err(format!("unknown panel option `{w}`"))),
+            ("then", Some(_)) => {
+                // the action runs to the end of the header
+                then = parse_action(bld, &header, i + 1, header.tokens.len());
+                break;
+            }
+            (w, _) => bld.err(b.err(format!("unknown panel option `{w}` (refresh TIME, then ACTION)"))),
         }
         i += 2;
     }
@@ -997,7 +1031,11 @@ fn build_panel(bld: &mut Builder, b: &RawBlock) -> Option<PanelDef> {
         let rects = det.fields.iter().filter(|f| f.name == item.key()).map(|f| f.rect).collect();
         fields.push(FieldDef { name: item.key().to_string(), kind, align, rects });
     }
-    Some(PanelDef { name: b.name.clone(), params, refresh, picture: det.picture, width: det.width, height: det.height, fields })
+    let def = PanelDef { name: b.name.clone(), params, refresh, then, picture: det.picture, width: det.width, height: det.height, fields };
+    if def.then.is_some() && !def.is_form() {
+        bld.err(b.err(format!("panel `{}` has `then` but no input fields", b.name)));
+    }
+    Some(def)
 }
 
 /// Parses an action from `item.tokens[from..to]`.

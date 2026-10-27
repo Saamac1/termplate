@@ -208,7 +208,7 @@ input TARGET_DIR
 
 - Lajit: `text`, `number`, `password` (ei kaiuta, ei lokia), `path` (täydennys), `choice`.
 - Avataan valikosta (`open TARGET_DIR`), upotetaan paneeliin (`input`-kenttä) tai sijoitetaan asettelun alueeseen.
-- `confirm` paneelin `input`-kentän kohdalla avaa syötteen modaalina. Asettelun alueessa syötettä muokataan paikallaan, kun alueella on fokus, ja muuttujan uusi arvo (`set`, koprosessin `set`) näkyy kentässä heti.
+- Asettelun alueessa syötettä muokataan paikallaan, kun alueella on fokus, ja muuttujan uusi arvo (`set`, koprosessin `set`) näkyy kentässä heti.
 - `- then TOIMINTO` ajetaan, kun kelvollinen arvo on tallennettu (esim. `- then ASK`).
 - `- clear` tyhjentää kentän `then`-toiminnon jälkeen, kuten keskustelun tai komentorivin syöte. `then`-komento on jo saanut arvon ympäristöönsä.
 - **Polun täydennys:** `path`-syötteessä `tab` täydentää (syötekonteksti on modaalinen, joten se ei ole `next_area`).
@@ -216,7 +216,28 @@ input TARGET_DIR
   - Toinen `tab` avaa osumista suodatettavan listavalikon (`TERMPLATE.COMPLETE`); hakemistot päättyvät `/`-merkkiin. Valinta täyttää kentän, ja `back` sulkee listan.
   - Suhteellinen polku luetaan työhakemistosta, `~/` kotihakemistosta. Piilotiedostot näytetään vain, kun kirjoitettu nimi alkaa pisteellä.
   - Yli 200 osumaa: listassa näytetään 200 ensimmäistä ja `…`.
-- **Avoin:** lomake eli useampi syöte yhdessä paneelissa, sarkaimella siirtyen ja yhdellä vahvistuksella.
+#### 8.1 Lomakkeet
+
+Paneeli, jossa on `input`-kenttiä, on lomake: kenttiä muokataan paikallaan ja ne vahvistetaan yhdellä kertaa.
+
+```
+panel NEW_USER then CREATE_USER
+nnnnnn [user______]
+aaaaaa [age_]
+
+legend:
+- n text NEW_USER.NAME
+- a text NEW_USER.AGE
+- user input USER_IN
+- age input AGE
+```
+
+- **Siirtyminen:** `tab` ja `down` seuraavaan kenttään, `shift+tab` ja `up` edelliseen. `path`-kentässä `tab` täydentää, ja `choice`-kentässä nuolet vaihtavat arvoa. Modaalissa siirto kiertää; asettelun alueessa viimeisen kentän jälkeen `tab` siirtyy seuraavaan alueeseen.
+- **Vahvistus** (`confirm`, oletuksena `enter`): kaikki kentät jäsennetään muuttujansa tyypillä ja tarkistetaan `validate`-ehdollaan. Ensimmäinen virhe näytetään, kursori siirtyy sen kenttään, eikä mitään tallenneta. Kun kaikki kelpaavat, muuttujat asetetaan, modaali sulkeutuu ja otsikon `then TOIMINTO` ajetaan. `then` on otsikon viimeinen määre.
+- **Peruutus** (`back`): muokkaukset hylätään ja modaali sulkeutuu; asettelun alueessa kentät palaavat muuttujien arvoihin.
+- Hiiren klikkaus kenttään valitsee sen; klikkaus lomakkeeseen ei vahvista sitä.
+- Lomake käyttää `INPUT`-kontekstin näppäimiä ja tyyliä. Modaalinen paneeli saa aina reunan tyylistä (luku 11) ja otsikon tekstistä `<PANEELI>.TITLE`; lomakkeen alarivillä on vihje `TERMPLATE.FORM_HINT` tai virheilmoitus.
+- Lataus hylkää `then`-määreen paneelilta, jossa ei ole syötekenttiä.
 
 ### 9. Näppäimet, hiiri ja kontekstit
 
@@ -311,6 +332,7 @@ dir=$(termplate input ui.termplate TARGET_DIR)
 - Paluuarvot: 0 valinta, 1 `back`, 2 `quit`, 3 muu virhe, signaalista 128 + signaali.
 - Tiedostossa ei tarvitse olla `app`-lohkoa (luku 2).
 - Listavalikko, jolla ei ole rivejä eikä `<VALIKKO>.EMPTY`-tekstiä, ei avaudu: paluuarvo on 1 eikä mitään tulosteta.
+- Lomake (luku 8.1) tulostaa vahvistettaessa kenttien arvot omille riveilleen kenttäjärjestyksessä (`termplate panel ui.termplate LOGIN`); `then` jätetään ajamatta.
 - Käyttöliittymä piirretään `/dev/tty`:hen, joten stdout jää tulokselle.
 
 #### 14.2 Sovellustila
@@ -333,7 +355,7 @@ done
 ```
 
 - Isännältä: `set`, `open`, `close`, `log`, `refresh`, `busy on|off`, `quit`.
-- Isännälle: `select VALIKKO KOHTA`, `input SYÖTE ARVO`, `key TOIMINTO`, `closed VALIKKO`, `emit NIMI`.
+- Isännälle: `select VALIKKO KOHTA`, `input SYÖTE ARVO`, `submit LOMAKE` (lomakkeen jokaisen kentän `input`-tapahtuman jälkeen), `key TOIMINTO`, `closed VALIKKO`, `emit NIMI`.
 - Arvo on rivin loppu; rivinvaihdot ja kenoviivat koodataan (`\n`, `\\`).
 - Protokolla on oletuksena rivipohjainen. Valitsin `--json` vaihtaa sen JSON Linesiksi muita kieliä varten.
 
@@ -377,12 +399,11 @@ trait Host {
 
 ### 17. Avoimet kysymykset (koonti)
 
-1. Lomakkeet: useampi syöte yhdessä paneelissa (luku 8). Nyt `confirm` avaa paneelin `input`-kentän modaalina.
-2. Teematiedostot ja tyylin valinta (luku 11, RLML D 13).
-3. Säilytettyjen ANSI-värien piirto lokissa (`ansi keep`, luku 12).
-4. Erillinen pääteikkuna taustakomennoille (`- window`, luku 15).
+1. Teematiedostot ja tyylin valinta (luku 11, RLML D 13).
+2. Säilytettyjen ANSI-värien piirto lokissa (`ansi keep`, luku 12).
+3. Erillinen pääteikkuna taustakomennoille (`- window`, luku 15).
 
-Ratkaistut: reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8).
+Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8).
 
 ### Liite B. Esimerkit
 

@@ -1344,3 +1344,212 @@ fn opening_a_menu_evaluates_it_at_once() {
     e.perform_named(&mut h, "open FILE_LIST");
     assert_eq!(e.menu_state("FILE_LIST").unwrap().total(), 1, "rows before the first draw");
 }
+
+// ----- forms (spec §8) ----------------------------------------------------------
+
+const FORM: &str = r#"app FORMS
+- termplate 0.1
+- language en
+
+vars
+- USER text
+- AGE number 30 range 1..120
+- SECRET text
+
+layout MAIN
+ffff
+llll
+
+legend:
+- f NEW_USER
+- l LOG size.height 3
+
+log LOG history 20
+
+panel NEW_USER then SAVE_USER
+nnnnnn [user______]
+aaaaaa [age_]
+pppppp [secret____]
+
+legend:
+- n text NEW_USER.NAME "Name"
+- a text NEW_USER.AGE "Age"
+- p text NEW_USER.SECRET "Secret"
+- user input USER_IN
+- age input AGE_IN
+- secret input SECRET_IN
+
+input USER_IN
+- var USER
+- validate not $VALUE == ""
+- error USER_IN.EMPTY
+
+input AGE_IN
+- var AGE
+- kind number
+
+input SECRET_IN
+- var SECRET
+- kind password
+
+command SAVE_USER
+- run ./save.sh
+- env USER=$USER AGE=$AGE
+- secret SECRET stdin
+
+text en
+NEW_USER.TITLE New user
+USER_IN.EMPTY Name is required
+"#;
+
+fn form_engine(mode: Mode) -> (Engine, TestHost) {
+    let mut host = TestHost::new();
+    let mut e = Engine::new(model_of(FORM), mode);
+    e.set_size(50, 14);
+    match mode {
+        Mode::App => e.start_app(&mut host).unwrap(),
+        _ => e.start_widget(&mut host, "NEW_USER").unwrap(),
+    }
+    (e, host)
+}
+
+fn modal_form() -> (Engine, TestHost) {
+    let (mut e, mut h) = form_engine(Mode::App);
+    // the layout form has focus; Esc there only drops edits
+    e.perform_named(&mut h, "open NEW_USER");
+    assert_eq!(e.top().as_deref(), Some("NEW_USER"));
+    (e, h)
+}
+
+#[test]
+fn form_fields_are_edited_in_place_and_submitted_together() {
+    let (mut e, mut h) = modal_form();
+    typ(&mut e, &mut h, "ann");
+    key(&mut e, &mut h, KeyCode::Tab);
+    key(&mut e, &mut h, KeyCode::Backspace);
+    key(&mut e, &mut h, KeyCode::Backspace);
+    typ(&mut e, &mut h, "41");
+    key(&mut e, &mut h, KeyCode::Down);
+    typ(&mut e, &mut h, "pw");
+    let s = screen(&mut e);
+    assert!(s.contains("ann") && s.contains("41") && s.contains("**") && !s.contains("pw"), "{s}");
+    assert!(s.contains("New user"), "title on the border: {s}");
+    assert!(h.runs.is_empty(), "nothing runs before the one confirmation");
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.top(), None, "the modal form closed");
+    assert_eq!(e.var("USER"), Some(&Value::Text("ann".into())));
+    assert_eq!(e.var("AGE"), Some(&Value::Number(41.0)));
+    let run = &h.runs[0];
+    assert!(run.env.contains(&("USER".into(), "ann".into())) && run.env.contains(&("AGE".into(), "41".into())), "{:?}", run.env);
+    assert_eq!(run.stdin.as_deref(), Some("pw"));
+}
+
+#[test]
+fn form_validation_stops_at_the_first_bad_field() {
+    let (mut e, mut h) = modal_form();
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.top().as_deref(), Some("NEW_USER"));
+    assert!(screen(&mut e).contains("Name is required"));
+    typ(&mut e, &mut h, "bo");
+    assert!(!screen(&mut e).contains("Name is required"), "typing clears the message");
+    key(&mut e, &mut h, KeyCode::Tab);
+    typ(&mut e, &mut h, "0");
+    key(&mut e, &mut h, KeyCode::Up);
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert!(h.runs.is_empty(), "300 is out of range");
+    let f = e.render();
+    let (_, y) = f.cursor.unwrap();
+    assert!(f.row(y).contains("300"), "cursor moved to the age field: {:?}", f.rows());
+    assert_eq!(e.var("USER"), Some(&Value::Text(String::new())), "no field is stored when one is bad");
+}
+
+#[test]
+fn back_discards_form_edits() {
+    let (mut e, mut h) = modal_form();
+    typ(&mut e, &mut h, "zed");
+    key(&mut e, &mut h, KeyCode::Esc);
+    assert_eq!(e.top(), None);
+    assert_eq!(e.var("USER"), Some(&Value::Text(String::new())));
+    e.perform_named(&mut h, "open NEW_USER");
+    assert!(!screen(&mut e).contains("zed"));
+}
+
+#[test]
+fn form_field_moves_wrap_in_a_modal() {
+    let (mut e, mut h) = modal_form();
+    key(&mut e, &mut h, KeyCode::BackTab);
+    typ(&mut e, &mut h, "s");
+    key(&mut e, &mut h, KeyCode::Tab);
+    typ(&mut e, &mut h, "u");
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.var("USER"), Some(&Value::Text("u".into())));
+    assert_eq!(h.runs[0].stdin.as_deref(), Some("s"));
+}
+
+#[test]
+fn layout_form_tabs_on_to_the_next_area_after_its_last_field() {
+    let (mut e, mut h) = form_engine(Mode::App);
+    assert_eq!(e.focused_target().as_deref(), Some("NEW_USER"));
+    typ(&mut e, &mut h, "kim");
+    key(&mut e, &mut h, KeyCode::Tab);
+    key(&mut e, &mut h, KeyCode::Tab);
+    assert_eq!(e.focused_target().as_deref(), Some("NEW_USER"));
+    key(&mut e, &mut h, KeyCode::Tab);
+    assert_eq!(e.focused_target().as_deref(), Some("LOG"), "past the last field");
+    key(&mut e, &mut h, KeyCode::Tab);
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.var("USER"), Some(&Value::Text("kim".into())), "edits survived leaving the area");
+    assert_eq!(h.runs.len(), 1);
+}
+
+#[test]
+fn clicking_a_field_picks_it() {
+    let (mut e, mut h) = modal_form();
+    let f = e.render();
+    let y = (0..f.height).rev().find(|&y| f.row(y).contains("Secret")).unwrap();
+    let x = f.row(y).find("Secret").unwrap() + 8;
+    e.handle(&mut h, InputEvent::click(x, y));
+    typ(&mut e, &mut h, "k");
+    assert_eq!(e.top().as_deref(), Some("NEW_USER"), "a click does not submit a form");
+    let f = e.render();
+    assert_eq!(f.cursor.map(|c| c.1), Some(y));
+}
+
+#[test]
+fn widget_form_prints_values_in_field_order() {
+    let (mut e, mut h) = form_engine(Mode::Widget);
+    typ(&mut e, &mut h, "lee");
+    key(&mut e, &mut h, KeyCode::Tab);
+    key(&mut e, &mut h, KeyCode::Tab);
+    typ(&mut e, &mut h, "x");
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.take_effects(), [Effect::Exit { code: 0, output: Some("lee\n30\nx".into()) }]);
+    assert!(h.runs.is_empty(), "widget mode does not run then");
+}
+
+#[test]
+fn serve_form_reports_inputs_then_submit() {
+    let (mut e, mut h) = form_engine(Mode::Serve);
+    typ(&mut e, &mut h, "rae");
+    key(&mut e, &mut h, KeyCode::Up);
+    typ(&mut e, &mut h, "s3");
+    key(&mut e, &mut h, KeyCode::Enter);
+    let events: Vec<String> = e
+        .take_effects()
+        .into_iter()
+        .filter_map(|x| match x {
+            Effect::Event(ev) => Some(crate::protocol::encode_event(&ev)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(events, ["input USER_IN rae", "input AGE_IN 30", "input SECRET_IN", "submit NEW_USER"]);
+    assert!(h.runs.is_empty(), "the coprocess runs commands");
+}
+
+#[test]
+fn then_needs_input_fields() {
+    let src = "app A\n- termplate 0.1\n\npanel P then quit\nxx\n\nlegend:\n- x text P.X\n";
+    let blocks: Vec<_> = parse("app.termplate", src).unwrap().blocks().cloned().collect();
+    let err = Model::build(blocks, &mut TestHost::new()).unwrap_err();
+    assert!(err.to_string().contains("has `then` but no input fields"), "{err}");
+}

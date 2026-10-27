@@ -62,6 +62,22 @@ menu OTHER
 """
 
 
+FORM_UI = """vars
+- HOST text "localhost"
+- PORT number 22 range 1..65535
+
+panel LOGIN
+hhhh [host__________]
+pppp [port_]
+
+legend:
+- h text LOGIN.HOST "Host"
+- p text LOGIN.PORT "Port"
+- host input HOST
+- port input PORT
+"""
+
+
 def spawn(args, cwd=None):
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 70, 0, 0))
@@ -170,6 +186,17 @@ def main():
         os.write(tty, b"\x11")
         code, _, _ = finish(p)
         ok &= check("quit with a panel evaluation running", code == 0, code)
+
+        # a form in widget mode: Tab between fields, Enter prints the values
+        ui = os.path.join(d, "form.termplate")
+        with open(ui, "w") as f:
+            f.write(FORM_UI)
+        p, tty, screen = spawn(["panel", ui, "LOGIN"], cwd=d)
+        os.write(tty, b"\x7f" * 9 + b"example.org\t"); time.sleep(0.3)
+        os.write(tty, b"\x7f\x7f2222"); time.sleep(0.3)
+        os.write(tty, b"\r")
+        code, out, _ = finish(p)
+        ok &= check("form widget prints values", (code, out) == (0, "example.org\n2222\n"), (code, out))
     sys.exit(0 if ok else 1)
 
 

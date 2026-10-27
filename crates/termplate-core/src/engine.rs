@@ -100,6 +100,8 @@ enum Hit {
     MenuRow { menu: String, index: usize },
     Area(usize),
     Input(String),
+    /// An input field of a form: the panel and the field's number.
+    FormField { panel: String, index: usize },
     Modal,
 }
 
@@ -123,6 +125,7 @@ pub const BUILTIN_TEXTS: &[(&str, &str)] = &[
     ("TERMPLATE.FAILED", "Command failed with status {STATUS}"),
     ("TERMPLATE.EMPTY", "(empty)"),
     ("TERMPLATE.LOADING", "…"),
+    ("TERMPLATE.FORM_HINT", "{^confirm} OK  {^back} Cancel  Tab next field"),
     ("TERMPLATE.OUTPUT", "Output"),
     ("TERMPLATE.RUNNING", "{NAME} is already running"),
     ("TERMPLATE.CANCELLED", "{NAME} cancelled"),
@@ -179,6 +182,10 @@ pub struct Engine {
     pending: BTreeMap<String, bool>,
     /// Menus and panels evaluated at least once.
     loaded: BTreeSet<String>,
+    /// The field being edited in each form (spec §8).
+    form_field: BTreeMap<String, usize>,
+    /// A form's validation message.
+    form_error: BTreeMap<String, String>,
 }
 
 fn complete_menu() -> crate::model::MenuDef {
@@ -302,6 +309,8 @@ impl Engine {
             evals: BTreeMap::new(),
             pending: BTreeMap::new(),
             loaded: BTreeSet::new(),
+            form_field: BTreeMap::new(),
+            form_error: BTreeMap::new(),
         }
     }
 
@@ -747,6 +756,8 @@ impl Engine {
             Screen::Input(_) => "INPUT".into(),
             // A modal panel, the confirmation and output dialogs use the
             // `MENU` bindings (D 11.5).
+            // A form takes the `INPUT` keys (`confirm`, `back`).
+            Screen::Panel(n) if self.model.panels.get(n).is_some_and(|p| p.is_form()) => "INPUT".into(),
             Screen::Panel(_) | Screen::Confirm { .. } => "MENU".into(),
             Screen::Output { title, .. } if self.model.logs.contains_key(title) => "LOG".into(),
             Screen::Output { .. } => "MENU".into(),
@@ -769,6 +780,8 @@ impl Engine {
                     Some(Screen::Output { title: t, lines: vec![], scroll: 0 })
                 } else if self.model.inputs.contains_key(&t) {
                     Some(Screen::Input(t))
+                } else if self.model.panels.get(&t).is_some_and(|p| p.is_form()) {
+                    Some(Screen::Panel(t))
                 } else {
                     None
                 };
@@ -1071,10 +1084,13 @@ impl Engine {
             None => false,
             Some(s) if !force && self.is_final(s) => false,
             Some(_) => {
-                if let Some(Screen::Menu(name)) = self.screens.pop()
-                    && self.mode == Mode::Serve {
+                match self.screens.pop() {
+                    Some(Screen::Menu(name)) if self.mode == Mode::Serve => {
                         self.effects.push(Effect::Event(Event::new("closed", &name, None)));
                     }
+                    Some(Screen::Panel(name)) => self.reset_form(&name),
+                    _ => {}
+                }
                 true
             }
         }
@@ -1147,6 +1163,10 @@ impl Engine {
             return;
         }
         let printable = matches!(code, KeyCode::Char(_)) && !mods.ctrl && !mods.alt;
+        if let Some(form) = self.active_form()
+            && self.form_key(host, &form, code, mods) {
+                return;
+            }
         match self.active() {
             Some(Screen::Input(name)) => {
                 let is_path = self.model.inputs.get(&name).is_some_and(|d| d.kind == InputKind::Path);
@@ -1195,6 +1215,129 @@ impl Engine {
                     self.confirm(host);
                 }
             }
+    }
+
+    // ----- forms (spec §8) -----------------------------------------------
+
+    /// The form being edited: the top modal panel, or the focused layout
+    /// panel, when it has input fields.
+    fn active_form(&self) -> Option<String> {
+        match self.active() {
+            Some(Screen::Panel(name)) if self.model.panels.get(&name).is_some_and(|p| p.is_form()) => Some(name),
+            _ => None,
+        }
+    }
+
+    fn form_inputs(&self, form: &str) -> Vec<String> {
+        self.model.panels.get(form).map(|p| p.form_inputs()).unwrap_or_default()
+    }
+
+    /// Editing keys go to the current field; `tab`, `shift+tab`, `up` and
+    /// `down` move between fields (`tab` completes in a `path` field).
+    /// Returns false for keys the bindings handle (`confirm`, `back`, …).
+    fn form_key(&mut self, host: &mut dyn Host, form: &str, code: KeyCode, mods: Mods) -> bool {
+        let inputs = self.form_inputs(form);
+        let idx = self.form_field.get(form).copied().unwrap_or(0).min(inputs.len().saturating_sub(1));
+        let Some(input) = inputs.get(idx).cloned() else { return false };
+        let kind = self.model.inputs.get(&input).map(|i| i.kind);
+        let plain = mods == Mods::default();
+        let step = match code {
+            KeyCode::Tab if plain && kind == Some(InputKind::Path) => {
+                self.complete(host, &input);
+                return true;
+            }
+            KeyCode::Tab if plain => 1,
+            KeyCode::BackTab => -1,
+            KeyCode::Down if plain && kind != Some(InputKind::Choice) => 1,
+            KeyCode::Up if plain && kind != Some(InputKind::Choice) => -1,
+            _ => {
+                self.input_state(&input).tabbed = false;
+                let used = self.edit_input(&input, code, mods);
+                if used {
+                    self.form_error.remove(form);
+                }
+                return used;
+            }
+        };
+        let next = idx as isize + step;
+        let modal = !self.screens.is_empty();
+        let n = inputs.len() as isize;
+        if !modal && (next < 0 || next >= n) {
+            // past the ends of a layout form: on to the next area
+            return false;
+        }
+        self.form_field.insert(form.to_string(), next.rem_euclid(n) as usize);
+        true
+    }
+
+    /// One confirmation for the whole form: every field is checked first,
+    /// then all variables are set and the panel's `then` runs.
+    fn submit_form(&mut self, host: &mut dyn Host, form: &str) {
+        let inputs = self.form_inputs(form);
+        let mut values = Vec::new();
+        for (i, name) in inputs.iter().enumerate() {
+            let Some(def) = self.model.inputs.get(name).cloned() else { continue };
+            let text: String = self.input_state(name).buf.iter().collect();
+            let ty = self.model.var(&def.var).map(|v| v.ty.clone()).unwrap_or(VarType::Text);
+            let checked = ty.parse_value(&text).and_then(|v| match &def.validate {
+                Some(expr) => {
+                    let vars = self.public_vars();
+                    let scope = Scope::new(&vars).with_value(text.clone());
+                    if host.eval_cond(expr, &scope) {
+                        Ok(v)
+                    } else {
+                        Err(self.text(def.error.as_deref().unwrap_or("TERMPLATE.INVALID"), &BTreeMap::new()))
+                    }
+                }
+                None => Ok(v),
+            });
+            match checked {
+                Ok(v) => values.push((def, text, v)),
+                Err(msg) => {
+                    self.form_field.insert(form.to_string(), i);
+                    self.form_error.insert(form.to_string(), msg);
+                    return;
+                }
+            }
+        }
+        for (def, _, v) in &values {
+            self.set_var(&def.var, v.clone());
+        }
+        self.form_error.remove(form);
+        let is_root = self.is_root();
+        match self.mode {
+            Mode::Widget if is_root => {
+                let out = values.iter().map(|(_, t, _)| t.as_str()).collect::<Vec<_>>().join("\n");
+                self.effects.push(Effect::Exit { code: 0, output: Some(out) });
+                return;
+            }
+            Mode::Serve => {
+                for (def, text, _) in &values {
+                    let shown = (def.kind != InputKind::Password).then_some(text.as_str());
+                    self.effects.push(Effect::Event(Event::new("input", &def.name, shown)));
+                }
+                self.effects.push(Effect::Event(Event::new("submit", form, None)));
+            }
+            _ => {}
+        }
+        if matches!(self.screens.last(), Some(Screen::Panel(n)) if n == form) && !is_root {
+            self.close_top(true);
+        }
+        self.form_field.remove(form);
+        let then = self.model.panels.get(form).and_then(|p| p.then.clone());
+        if let Some(then) = then
+            && (self.mode != Mode::Serve || !matches!(then, Action::Command(_) | Action::Run { .. })) {
+                self.perform(host, &then, None);
+            }
+    }
+
+    /// Forgets a form's unsaved edits: the fields show their variables.
+    fn reset_form(&mut self, form: &str) {
+        for i in self.form_inputs(form) {
+            self.inputs.remove(&i);
+        }
+        self.form_field.remove(form);
+        self.form_error.remove(form);
     }
 
     /// `tab` in a `path` input: completes the common prefix of the matches;
@@ -1335,6 +1478,17 @@ impl Engine {
                 }
                 return;
             }
+            Some(Hit::FormField { panel, index }) if plain(Mouse::Click) => {
+                // a click picks the field (and the area of a layout form)
+                if self.screens.is_empty() {
+                    self.focus_target(panel);
+                }
+                if self.active_form().as_deref() == Some(panel.as_str()) {
+                    self.form_field.insert(panel.clone(), *index);
+                }
+                return;
+            }
+            Some(Hit::Modal) if plain(Mouse::Click) && self.active_form().is_some() => return,
             Some(Hit::Modal) if plain(Mouse::Click) && matches!(self.screens.last(), Some(Screen::Panel(_))) => {
                 self.confirm(host);
                 return;
@@ -1479,6 +1633,7 @@ impl Engine {
                     l.back = 0;
                 }
             }
+            Some(Screen::Panel(name)) if self.screens.is_empty() => self.reset_form(&name),
             _ if !self.screens.is_empty() => self.back(),
             _ => {}
         }
@@ -1579,21 +1734,11 @@ impl Engine {
                 self.screens.pop();
             }
             Some(Screen::Output { .. }) => {}
-            Some(Screen::Panel(name)) => {
-                let input = self.model.panels.get(&name).and_then(|p| {
-                    p.fields.iter().find_map(|f| match &f.kind {
-                        FieldKind::Input { input } => Some(input.clone()),
-                        _ => None,
-                    })
-                });
-                match input {
-                    Some(i) => {
-                        let _ = self.open(host, &i, BTreeMap::new());
-                    }
-                    None if !self.screens.is_empty() => self.back(),
-                    None => {}
-                }
+            Some(Screen::Panel(name)) if self.model.panels.get(&name).is_some_and(|p| p.is_form()) => {
+                self.submit_form(host, &name);
             }
+            Some(Screen::Panel(_)) if !self.screens.is_empty() => self.back(),
+            Some(Screen::Panel(_)) => {}
             None => {}
         }
     }
@@ -2029,9 +2174,15 @@ impl Engine {
     }
 
     fn draw_target(&mut self, f: &mut Frame, target: &str, rect: Rect, focused: bool) {
-        if self.model.panels.contains_key(target) {
+        if let Some(def) = self.model.panels.get(target) {
+            let height = def.height;
             if !self.hidden_panels.contains(target) {
                 self.draw_panel(f, target, rect);
+                if let Some(e) = self.form_error.get(target).cloned() {
+                    // below the drawing when there is room, else on its last row
+                    let y = rect.y + height.min(rect.h.saturating_sub(1));
+                    f.aligned(rect.x, y, rect.w, &e, Align::Left, Role::Warning);
+                }
             }
         } else if self.model.menus.contains_key(target) {
             self.draw_menu(f, target, rect, focused, true);
@@ -2050,6 +2201,9 @@ impl Engine {
             }
         }
         let values = self.panel_values.get(name).cloned().unwrap_or_default();
+        let editing = self.active_form().as_deref() == Some(name);
+        let current = self.form_field.get(name).copied().unwrap_or(0);
+        let mut input_no = 0;
         for field in &def.fields {
             let v = values.get(&field.name).cloned().unwrap_or_default();
             for r in &field.rects {
@@ -2074,10 +2228,20 @@ impl Engine {
                         f.put(x, y, c, Role::Field);
                     }
                     FieldKind::Input { input } => {
+                        // a form field shows its edit buffer (spec §8)
                         let masked = self.model.inputs.get(input).is_some_and(|i| i.kind == InputKind::Password);
-                        let shown = if masked { "*".repeat(v.chars().count()) } else { v.clone() };
-                        f.aligned(x, y, w, &shown, field.align, Role::Input);
-                        self.hits.push((Rect::new(x, y, w, 1), Hit::Input(input.clone())));
+                        let st = self.input_state(input).clone();
+                        let text: String = if masked { "*".repeat(st.buf.len()) } else { st.buf.iter().collect() };
+                        let here = editing && input_no == current;
+                        let role = if here { Role::Selected } else { Role::Input };
+                        let (start, cursor_x) = input_view(&text, st.cursor, w);
+                        let visible: String = text.chars().skip(start).collect();
+                        f.fill(Rect::new(x, y, w, 1), ' ', role);
+                        f.text(x, y, w, &visible, role);
+                        if here {
+                            f.cursor = Some((x + cursor_x, y));
+                        }
+                        self.hits.push((Rect::new(x, y, w, 1), Hit::FormField { panel: name.to_string(), index: input_no }));
                     }
                     _ if hgt > 1 => {
                         // multi-line fields wrap between words; the last
@@ -2094,6 +2258,9 @@ impl Engine {
                     }
                     _ => f.aligned(x, y, w, &v, field.align, Role::Field),
                 }
+            }
+            if matches!(field.kind, FieldKind::Input { .. }) {
+                input_no += 1;
             }
         }
     }
@@ -2374,14 +2541,30 @@ impl Engine {
                 }
             }
             Screen::Panel(name) => {
-                f.set_area(vec!["MENU".into(), name.clone()]);
+                // a modal box always has a border from the style (spec §11);
+                // a form has a line for its hint or error
+                let ctx = self.screen_context(s);
+                let chain = vec![ctx, name.clone()];
+                f.set_area(chain.clone());
                 let Some(def) = self.model.panels.get(name) else { return };
-                let (pw, ph) = (def.width.min(w), def.height.min(h));
-                let r = centered(w, h, pw, ph, depth);
-                f.fill(r, ' ', Role::Normal);
+                let form = def.is_form();
+                let (dw, dh) = (def.width, def.height);
+                let message = form.then(|| match self.form_error.get(name) {
+                    Some(e) => (e.clone(), Role::Warning),
+                    None => (self.text("TERMPLATE.FORM_HINT", &BTreeMap::new()), Role::Dim),
+                });
+                let mw = message.as_ref().map_or(0, |(m, _)| str_width(m));
+                let (pw, ph) = (dw.max(mw) + 4, dh + 2 + usize::from(form));
+                let r = centered(w, h, pw.min(w), ph.min(h), depth);
+                let title = self.text_opt(&format!("{name}.TITLE"));
+                let border = self.modal_border(&chain);
+                self.draw_box(f, r, border, title.as_deref());
                 let name = name.clone();
-                self.draw_panel(f, &name, r);
-                self.hits.push((r, Hit::Modal));
+                let inner = Rect::new(r.x + 2, r.y + 1, r.w.saturating_sub(4), r.h.saturating_sub(2 + usize::from(form)));
+                self.draw_panel(f, &name, inner);
+                if let Some((msg, role)) = message {
+                    f.aligned(r.x + 2, r.y + r.h - 2, r.w.saturating_sub(4), &msg, Align::Left, role);
+                }
             }
             Screen::Confirm { command, it } => {
                 f.set_area(vec!["MENU".into()]);
