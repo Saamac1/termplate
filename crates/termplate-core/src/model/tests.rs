@@ -167,7 +167,7 @@ fn spec_panel_example() {
     let f = |n: &str| p.fields.iter().find(|f| f.name == n).unwrap();
     assert_eq!(f("T").kind, FieldKind::Text { key: "STATUS.TITLE".into(), params: vec![] });
     assert_eq!(f("T").align, Align::Center);
-    assert!(matches!(&f("d").kind, FieldKind::Value { expr } if expr.src == "$(df -h --output=avail / | tail -1)"));
+    assert!(matches!(&f("d").kind, FieldKind::Value { expr, ansi: false } if expr.src == "$(df -h --output=avail / | tail -1)"));
     assert!(matches!(&f("p").kind, FieldKind::Bar { value, max } if value.src == "$USED" && max.src == "100"));
 }
 
@@ -300,6 +300,41 @@ fn missing_interpreter_is_a_load_error() {
     let mut host = TestHost::new();
     host.reject.push("fish".into());
     assert!(Model::build(blocks, &mut host).unwrap_err().to_string().contains("interpreter `fish` not found"));
+}
+
+const GRID_BASE: &str = "vars\n- GRID text\n- ROW number\n- COL number 9\n- NAME text\n\ncommand PICK\n- run ./pick.sh\n\n";
+
+#[test]
+fn grid_cells_come_from_the_drawing() {
+    let m = ok(&format!("{GRID_BASE}panel BOARD\na a a │ a\na a a │ a\n\nlegend:\n- a grid $GRID ansi cursor ROW COL then PICK\n"));
+    let p = &m.panels["BOARD"];
+    let FieldKind::Grid { expr, ansi, cells, cursor, then } = &p.fields[0].kind else { panic!() };
+    assert_eq!(expr.src, "$GRID");
+    assert!(ansi);
+    assert_eq!(cells.len(), 2, "stacked runs are separate rows");
+    assert_eq!(cells[0].iter().map(|r| r.x).collect::<Vec<_>>(), [0, 2, 4, 8]);
+    assert_eq!(cells[1][3], Rect::new(8, 1, 1, 1));
+    assert_eq!(cursor, &Some(("ROW".into(), "COL".into())));
+    assert_eq!(then, &Some(Action::Command("PICK".into())));
+    assert!(p.cursor_grid().is_some());
+    assert_eq!(p.fields[0].align, Align::Center);
+    let m = ok(&format!("{GRID_BASE}panel SHOW\nbb bb\n\nlegend:\n- b grid $GRID\n"));
+    assert!(m.panels["SHOW"].cursor_grid().is_none(), "no cursor: display only");
+}
+
+#[test]
+fn grid_errors() {
+    let e = |legend: &str| err(&format!("{GRID_BASE}panel P\na a\na a\n\nlegend:\n{legend}\n"));
+    assert!(e("- a grid $GRID cursor NAME COL").contains("needs number variables, `NAME`"));
+    assert!(e("- a grid $GRID cursor ROW").contains("`cursor ROW COL`"));
+    assert!(e("- a grid $GRID then PICK").contains("`then` needs a `cursor`"));
+    assert!(e("- a grid").contains("`grid VALUE"));
+    let ragged = err(&format!("{GRID_BASE}panel P\na a a\na a\n\nlegend:\n- a grid $GRID\n"));
+    assert!(ragged.contains("same number of cells"), "{ragged}");
+    let two = err(&format!("{GRID_BASE}panel P\na b\n\nlegend:\n- a grid $GRID cursor ROW COL\n- b grid $GRID cursor ROW COL\n"));
+    assert!(two.contains("more than one grid with a cursor"), "{two}");
+    let form = err(&format!("{GRID_BASE}panel P\na [name___]\n\nlegend:\n- a grid $GRID cursor ROW COL\n- name input NAME\n"));
+    assert!(form.contains("both input fields and a grid"), "{form}");
 }
 
 #[test]

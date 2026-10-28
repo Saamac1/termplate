@@ -63,7 +63,8 @@ enum Screen {
     Menu(String),
     Panel(String),
     Input(String),
-    Confirm { command: String, it: Option<String> },
+    /// `key`: the key that started the command (`KEY`, spec §6).
+    Confirm { command: String, it: Option<String>, key: Option<String> },
     Output { title: String, lines: Vec<(String, bool)>, scroll: usize },
 }
 
@@ -108,6 +109,8 @@ enum Hit {
     Input(String),
     /// An input field of a form: the panel and the field's number.
     FormField { panel: String, index: usize },
+    /// A cell of a panel's cursor grid, 1-based.
+    GridCell { panel: String, row: usize, col: usize },
     Modal,
 }
 
@@ -174,6 +177,8 @@ pub struct Engine {
     size: (usize, usize),
     effects: Vec<Effect>,
     busy: bool,
+    /// The key whose binding is starting a command, for its `KEY`.
+    key_env: Option<String>,
     spin: usize,
     hits: Vec<(Rect, Hit)>,
     area_rects: BTreeMap<String, Rect>,
@@ -283,7 +288,16 @@ impl Engine {
         for (k, v) in BUILTIN_TEXTS {
             model.texts.defaults.entry(k.to_string()).or_insert(v.to_string());
         }
-        let vars = model.vars.iter().map(|v| (v.name.clone(), v.default.clone())).collect();
+        let mut vars: Vars = model.vars.iter().map(|v| (v.name.clone(), v.default.clone())).collect();
+        // A grid's cursor starts inside the grid (spec §5.1).
+        for p in model.panels.values() {
+            if let Some((cells, (row, col))) = p.cursor_grid().and_then(grid_of) {
+                for (var, n) in [(row, cells.len()), (col, cells[0].len())] {
+                    let v = vars.get(var).and_then(Value::as_number).unwrap_or(0.0);
+                    vars.insert(var.to_string(), Value::Number(v.clamp(1.0, n as f64).round()));
+                }
+            }
+        }
         model.menus.insert(COMPLETE_MENU.to_string(), complete_menu());
         let secret_vars = model.inputs.values().filter(|i| i.kind == InputKind::Password).map(|i| i.var.clone()).collect();
         Engine {
@@ -305,6 +319,7 @@ impl Engine {
             size: (80, 24),
             effects: Vec::new(),
             busy: false,
+            key_env: None,
             spin: 0,
             hits: Vec::new(),
             area_rects: BTreeMap::new(),
@@ -709,7 +724,7 @@ impl Engine {
         self.model.menus.contains_key(target)
             || self.model.logs.contains_key(target)
             || self.model.inputs.contains_key(target)
-            || self.model.panels.get(target).is_some_and(|p| p.fields.iter().any(|f| matches!(f.kind, FieldKind::Input { .. })))
+            || self.model.panels.get(target).is_some_and(|p| p.is_form() || p.cursor_grid().is_some())
     }
 
     fn focusables(&self) -> Vec<usize> {
@@ -769,6 +784,8 @@ impl Engine {
             // `MENU` bindings (D 11.5).
             // A form takes the `INPUT` keys (`confirm`, `back`).
             Screen::Panel(n) if self.model.panels.get(n).is_some_and(|p| p.is_form()) => "INPUT".into(),
+            // A grid with a cursor takes the `GRID` keys (spec §5.1).
+            Screen::Panel(n) if self.model.panels.get(n).is_some_and(|p| p.cursor_grid().is_some()) => "GRID".into(),
             Screen::Panel(_) | Screen::Confirm { .. } => "MENU".into(),
             Screen::Output { title, .. } if self.model.logs.contains_key(title) => "LOG".into(),
             Screen::Output { .. } => "MENU".into(),
@@ -791,7 +808,7 @@ impl Engine {
                     Some(Screen::Output { title: t, lines: vec![], scroll: 0 })
                 } else if self.model.inputs.contains_key(&t) {
                     Some(Screen::Input(t))
-                } else if self.model.panels.get(&t).is_some_and(|p| p.is_form()) {
+                } else if self.model.panels.get(&t).is_some_and(|p| p.is_form() || p.cursor_grid().is_some()) {
                     Some(Screen::Panel(t))
                 } else {
                     None
@@ -990,7 +1007,7 @@ impl Engine {
         for f in &def.fields {
             match &f.kind {
                 FieldKind::Text { params, .. } => v.extend(params.iter().map(|(_, e)| (e.clone(), ExprKind::Value))),
-                FieldKind::Value { expr } => v.push((expr.clone(), ExprKind::Value)),
+                FieldKind::Value { expr, .. } | FieldKind::Grid { expr, .. } => v.push((expr.clone(), ExprKind::Value)),
                 FieldKind::Bar { value, max } => {
                     v.push((value.clone(), ExprKind::Value));
                     v.push((max.clone(), ExprKind::Value));
@@ -1018,7 +1035,7 @@ impl Engine {
                     }
                     self.text(key, &extra)
                 }
-                FieldKind::Value { .. } => next_text(&mut r),
+                FieldKind::Value { .. } | FieldKind::Grid { .. } => next_text(&mut r),
                 FieldKind::Param { name } => params.get(name).cloned().unwrap_or_default(),
                 FieldKind::Bar { .. } => {
                     let v = next_value(&mut r).as_number().unwrap_or(0.0);
@@ -1213,6 +1230,7 @@ impl Engine {
         }
         let stack = self.context_stack();
         if let Some(action) = self.model.keymap.lookup(&stack, &binding).map(str::to_string) {
+            self.key_env = Some(binding.name());
             self.perform_named(host, &action);
             return;
         }
@@ -1226,6 +1244,96 @@ impl Engine {
                     self.confirm(host);
                 }
             }
+    }
+
+    // ----- grids (spec §5.1) ---------------------------------------------
+
+    /// The cursor of a panel's grid (1-based row and column), inside it.
+    fn grid_cursor(&self, panel: &str) -> Option<(usize, usize)> {
+        let (cells, (row, col)) = self.model.panels.get(panel)?.cursor_grid().and_then(grid_of)?;
+        let at = |var: &str, n: usize| self.vars.get(var).and_then(Value::as_number).unwrap_or(1.0).clamp(1.0, n as f64) as usize;
+        Some((at(row, cells.len()), at(col, cells[0].len())))
+    }
+
+    /// Moves the cursor: its variables change only when it moves, as every
+    /// change re-evaluates what shows them.
+    fn set_grid_cursor(&mut self, panel: &str, r: usize, c: usize) {
+        let Some((_, (row, col))) = self.model.panels.get(panel).and_then(|p| p.cursor_grid()).and_then(grid_of) else { return };
+        let (row, col) = (row.to_string(), col.to_string());
+        for (var, n) in [(row, r), (col, c)] {
+            if self.vars.get(&var).and_then(Value::as_number) == Some(n as f64) {
+                continue;
+            }
+            if let Err(e) = self.set_var_text(&var, &n.to_string()) {
+                self.report(&e);
+            }
+        }
+    }
+
+    fn move_grid(&mut self, panel: &str, nav: &str) {
+        let Some((cells, _)) = self.model.panels.get(panel).and_then(|p| p.cursor_grid()).and_then(grid_of) else { return };
+        let (rows, cols) = (cells.len(), cells[0].len());
+        let Some((r, c)) = self.grid_cursor(panel) else { return };
+        let (r, c) = match nav {
+            "up" => (r.saturating_sub(1).max(1), c),
+            "down" => ((r + 1).min(rows), c),
+            "left" => (r, c.saturating_sub(1).max(1)),
+            "right" => (r, (c + 1).min(cols)),
+            "home" => (r, 1),
+            "end" => (r, cols),
+            _ => return,
+        };
+        self.set_grid_cursor(panel, r, c);
+    }
+
+    /// `confirm` on a grid: widget mode prints `ROW COL`, serve mode sends
+    /// `select PANEL ROW COL`, and the grid's `then` runs (spec §5.1).
+    fn confirm_grid(&mut self, host: &mut dyn Host, panel: &str) {
+        let Some((r, c)) = self.grid_cursor(panel) else { return };
+        let then = self.model.panels.get(panel).and_then(|p| p.cursor_grid()).and_then(|f| match &f.kind {
+            FieldKind::Grid { then, .. } => then.clone(),
+            _ => None,
+        });
+        let cell = format!("{r} {c}");
+        match self.mode {
+            Mode::Widget if self.is_root() => {
+                self.effects.push(Effect::Exit { code: 0, output: Some(cell) });
+                return;
+            }
+            Mode::Serve => self.effects.push(Effect::Event(Event::new("select", panel, Some(&cell)))),
+            _ => {}
+        }
+        if let Some(then) = then
+            && (self.mode != Mode::Serve || !matches!(then, Action::Command(_) | Action::Run { .. })) {
+                self.perform(host, &then, None);
+            }
+    }
+
+    fn draw_grid(&mut self, f: &mut Frame, panel: &str, area: Rect, field: &crate::model::FieldDef, value: &str) {
+        let FieldKind::Grid { ansi, cells, cursor, .. } = &field.kind else { return };
+        let here = cursor.is_some() && self.active() == Some(Screen::Panel(panel.to_string()));
+        let at = self.grid_cursor(panel);
+        let lines: Vec<&str> = value.lines().collect();
+        for (ri, row) in cells.iter().enumerate() {
+            let line = lines.get(ri).copied().unwrap_or("");
+            let (plain, styles) = if *ansi { crate::ansi::parse(line) } else { (strip_ansi(line), None) };
+            let words = grid_words(&plain);
+            for (ci, cell) in row.iter().enumerate() {
+                if cell.x >= area.w || cell.y >= area.h {
+                    continue;
+                }
+                let r = Rect::new(area.x + cell.x, area.y + cell.y, cell.w.min(area.w - cell.x), 1);
+                let (text, st) = match words.get(ci) {
+                    Some((i, w)) => (w.as_str(), styles.as_ref().map(|s| &s[*i..*i + w.chars().count()])),
+                    None => ("", None),
+                };
+                let role = if here && at == Some((ri + 1, ci + 1)) { Role::Selected } else { Role::Field };
+                styled_line(f, r, text, field.align, role, st);
+                if cursor.is_some() {
+                    self.hits.push((r, Hit::GridCell { panel: panel.to_string(), row: ri + 1, col: ci + 1 }));
+                }
+            }
+        }
     }
 
     // ----- forms (spec §8) -----------------------------------------------
@@ -1499,6 +1607,19 @@ impl Engine {
                 }
                 return;
             }
+            Some(Hit::GridCell { panel, row, col }) if plain(Mouse::Click) => {
+                // a click picks the cell; a click on the picked cell confirms it
+                let active = self.active() == Some(Screen::Panel(panel.clone()));
+                if self.screens.is_empty() {
+                    self.focus_target(panel);
+                }
+                if active && self.grid_cursor(panel) == Some((*row, *col)) {
+                    self.confirm_grid(host, panel);
+                } else {
+                    self.set_grid_cursor(panel, *row, *col);
+                }
+                return;
+            }
             Some(Hit::Modal) if plain(Mouse::Click) && self.active_form().is_some() => return,
             Some(Hit::Modal) if plain(Mouse::Click) && matches!(self.screens.last(), Some(Screen::Panel(_))) => {
                 self.confirm(host);
@@ -1525,6 +1646,7 @@ impl Engine {
         }
         let stack = self.context_stack();
         if let Some(action) = self.model.keymap.lookup(&stack, &binding).map(str::to_string) {
+            self.key_env = Some(binding.name());
             self.perform_named(host, &action);
         }
     }
@@ -1563,6 +1685,9 @@ impl Engine {
     /// Performs a key-bound action: a built-in, `open X`, `toggle X` or a
     /// command.
     pub fn perform_named(&mut self, host: &mut dyn Host, name: &str) {
+        // Only a command bound to the key gets it as `KEY`, not what a
+        // built-in action leads to (`confirm` → an input's `then`).
+        let key = self.key_env.take();
         if let Some(target) = name.strip_prefix("open ") {
             // The same binding closes the menu it opened (M 8 ALWAYS).
             if matches!(self.screens.last(), Some(Screen::Menu(m)) if m == target) {
@@ -1599,6 +1724,7 @@ impl Engine {
             return;
         }
         let it = self.current_it();
+        self.key_env = key;
         self.run_command(host, name, it);
     }
 
@@ -1652,6 +1778,9 @@ impl Engine {
 
     fn nav(&mut self, nav: &str) {
         match self.active() {
+            Some(Screen::Panel(name)) if self.model.panels.get(&name).is_some_and(|p| p.cursor_grid().is_some()) => {
+                self.move_grid(&name, nav);
+            }
             Some(Screen::Menu(name)) => {
                 let page = self.area_rects.get(&name).map(|r| r.h.max(2) as isize - 1).unwrap_or(10);
                 if let ("left" | "right", Some((var, lo, hi, pool))) = (nav, self.current_adjust(&name)) {
@@ -1737,9 +1866,9 @@ impl Engine {
         match self.active() {
             Some(Screen::Menu(name)) => self.confirm_menu(host, &name),
             Some(Screen::Input(name)) => self.submit_input(host, &name),
-            Some(Screen::Confirm { command, it }) => {
+            Some(Screen::Confirm { command, it, key }) => {
                 self.screens.pop();
-                self.execute_command(host, &command, it);
+                self.execute_command(host, &command, it, key);
             }
             Some(Screen::Output { .. }) if !self.screens.is_empty() => {
                 self.screens.pop();
@@ -1747,6 +1876,9 @@ impl Engine {
             Some(Screen::Output { .. }) => {}
             Some(Screen::Panel(name)) if self.model.panels.get(&name).is_some_and(|p| p.is_form()) => {
                 self.submit_form(host, &name);
+            }
+            Some(Screen::Panel(name)) if self.model.panels.get(&name).is_some_and(|p| p.cursor_grid().is_some()) => {
+                self.confirm_grid(host, &name);
             }
             Some(Screen::Panel(_)) if !self.screens.is_empty() => self.back(),
             Some(Screen::Panel(_)) => {}
@@ -1926,7 +2058,7 @@ impl Engine {
                 }
                 let req = RunRequest {
                     cmdline: cmdline.clone(),
-                    env: self.command_env(&[], it.as_deref()),
+                    env: self.command_env(&[], it.as_deref(), None),
                     stdin: None,
                     interactive: *interactive,
                     timeout: if *interactive { None } else { self.model.settings.timeout },
@@ -1966,21 +2098,25 @@ impl Engine {
     }
 
     pub fn run_command(&mut self, host: &mut dyn Host, name: &str, it: Option<String>) {
+        // `KEY` is for the command a key started, not for its chain.
+        let key = self.key_env.take();
         let Some(def) = self.model.commands.get(name) else {
             self.report(&format!("unknown command `{name}`"));
             return;
         };
         if def.confirm.is_some() {
-            self.screens.push(Screen::Confirm { command: name.to_string(), it });
+            self.screens.push(Screen::Confirm { command: name.to_string(), it, key });
             return;
         }
-        self.execute_command(host, name, it);
+        self.execute_command(host, name, it, key);
     }
 
     /// A command's environment (spec §6): only its `env` entries, declared
-    /// secrets and `IT`. Variables reach it only through `env`.
-    fn command_env(&self, extra: &[(String, String)], it: Option<&str>) -> Vec<(String, String)> {
+    /// secrets, `IT` and the `KEY` that started it. Variables reach it only
+    /// through `env`.
+    fn command_env(&self, extra: &[(String, String)], it: Option<&str>, key: Option<&str>) -> Vec<(String, String)> {
         let mut env: Vec<(String, String)> = it.map(|it| ("IT".to_string(), it.to_string())).into_iter().collect();
+        env.extend(key.map(|k| ("KEY".to_string(), k.to_string())));
         for (k, v) in extra {
             env.retain(|(ek, _)| ek != k);
             env.push((k.clone(), v.clone()));
@@ -1988,7 +2124,7 @@ impl Engine {
         env
     }
 
-    fn execute_command(&mut self, host: &mut dyn Host, name: &str, it: Option<String>) {
+    fn execute_command(&mut self, host: &mut dyn Host, name: &str, it: Option<String>, key: Option<String>) {
         let Some(def) = self.model.commands.get(name).cloned() else { return };
         if self.chain_depth >= MAX_CHAIN {
             self.report(&format!("command chain too deep at `{name}`"));
@@ -2019,7 +2155,7 @@ impl Engine {
                     shell: def.shell.clone(),
                     script: def.script,
                     window: def.window,
-                    env: self.command_env(&extra, it.as_deref()),
+                    env: self.command_env(&extra, it.as_deref(), key.as_deref()),
                     stdin,
                     interactive: def.interactive,
                     timeout: if background { def.timeout.or(self.model.settings.timeout) } else { None },
@@ -2233,6 +2369,16 @@ impl Engine {
         let mut input_no = 0;
         for field in &def.fields {
             let v = values.get(&field.name).cloned().unwrap_or_default();
+            if matches!(field.kind, FieldKind::Grid { .. }) {
+                self.draw_grid(f, name, rect, field, &v);
+                continue;
+            }
+            // value fields drop escape sequences, or draw their colors with `ansi`
+            let (v, styles) = match field.kind {
+                FieldKind::Value { ansi: true, .. } => crate::ansi::parse(&v),
+                FieldKind::Value { .. } => (strip_ansi(&v), None),
+                _ => (v, None),
+            };
             for r in &field.rects {
                 if r.x >= rect.w || r.y >= rect.h {
                     continue;
@@ -2274,16 +2420,18 @@ impl Engine {
                         // multi-line fields wrap between words; the last
                         // visible line is cut with `…` (D 11.5)
                         let mut lines = wrap(&v, w);
+                        let line_styles = styles.as_ref().map(|s| crate::ansi::wrap_styles(&lines, &v, s));
                         if lines.len() > hgt {
                             lines.truncate(hgt);
                             let last = lines.last_mut().unwrap();
                             last.push_str(" …");
                         }
                         for (i, line) in lines.iter().chain(std::iter::repeat(&String::new())).take(hgt).enumerate() {
-                            f.aligned(x, y + i, w, line, field.align, Role::Field);
+                            let st = line_styles.as_ref().and_then(|s| s.get(i)).map(Vec::as_slice);
+                            styled_line(f, Rect::new(x, y + i, w, 1), line, field.align, Role::Field, st);
                         }
                     }
-                    _ => f.aligned(x, y, w, &v, field.align, Role::Field),
+                    _ => styled_line(f, Rect::new(x, y, w, 1), &v, field.align, Role::Field, styles.as_deref()),
                 }
             }
             if matches!(field.kind, FieldKind::Input { .. }) {
@@ -2600,7 +2748,7 @@ impl Engine {
                     f.aligned(r.x + 2, r.y + r.h - 2, r.w.saturating_sub(4), &msg, Align::Left, role);
                 }
             }
-            Screen::Confirm { command, it } => {
+            Screen::Confirm { command, it, .. } => {
                 f.set_area(vec!["MENU".into()]);
                 let key = self.model.commands.get(command).and_then(|c| c.confirm.clone()).unwrap_or_default();
                 let extra: BTreeMap<String, String> = it.iter().map(|v| ("IT".to_string(), v.clone())).collect();
@@ -2676,6 +2824,51 @@ fn compare_values(a: &str, b: &str) -> std::cmp::Ordering {
         (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
         _ => a.cmp(b),
     }
+}
+
+/// Draws a field line aligned in `r`, with per-character `styles` over
+/// `role` when the value kept its ANSI colors.
+fn styled_line(f: &mut Frame, r: Rect, line: &str, align: Align, role: Role, styles: Option<&[Style]>) {
+    f.aligned(r.x, r.y, r.w, line, align, role);
+    let Some(styles) = styles.filter(|_| r.w > 0) else { return };
+    let width = str_width(line);
+    let off = match align {
+        _ if width >= r.w => 0,
+        Align::Left => 0,
+        Align::Right => r.w - width,
+        Align::Center => (r.w - width) / 2,
+    };
+    // a cut line ends in `…`, which keeps the field's own style
+    let room = if width > r.w { r.w - 1 } else { r.w - off };
+    f.styled_text(r.x + off, r.y, room, line, role, styles);
+}
+
+/// A grid's cells, row by row, and its cursor variables (row, column).
+type GridCursor<'a> = (&'a [Vec<Rect>], (&'a str, &'a str));
+
+/// The cells and cursor variables of a grid with a cursor (spec §5.1).
+fn grid_of(field: &crate::model::FieldDef) -> Option<GridCursor<'_>> {
+    match &field.kind {
+        FieldKind::Grid { cells, cursor: Some((row, col)), .. } => Some((cells, (row, col))),
+        _ => None,
+    }
+}
+
+/// The words of a grid row with the index of each one's first character.
+fn grid_words(line: &str) -> Vec<(usize, String)> {
+    let mut words: Vec<(usize, String)> = Vec::new();
+    let mut in_word = false;
+    for (i, c) in line.chars().enumerate() {
+        if c.is_whitespace() {
+            in_word = false;
+        } else if in_word {
+            words.last_mut().unwrap().1.push(c);
+        } else {
+            words.push((i, c.to_string()));
+            in_word = true;
+        }
+    }
+    words
 }
 
 /// Removes ANSI escape sequences (CSI and OSC).

@@ -210,3 +210,30 @@ fn interactive_commands_run_without_a_terminal() {
     assert_eq!((code, out.as_str()), (0, "--- exit 0\n"), "{err}");
     assert!(d.join("viewed").exists());
 }
+
+#[test]
+fn sudoku_example() {
+    let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sudoku");
+    let steps = "\
+expect Cells left: 51
+key l l
+type 4
+wait
+expect 5 3 4
+expect Cells left: 50
+type 9
+wait
+expect Conflict: box 1: 9
+type 0
+wait
+expect Cells left: 51
+key h h
+type 1
+wait
+expect 5 3
+reject Cells left: 50
+key q
+";
+    let (code, out, err) = render(&d, &["run", "sudoku.termplate"], steps);
+    assert_eq!((code, out.as_str()), (0, "--- exit 0\n"), "{err}");
+}

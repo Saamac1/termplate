@@ -1,0 +1,155 @@
+> Sudoku: a whole application in one file (spec §2). The grid (§5.1) shows
+> the board and moves the cursor; digit keys run one command that gets the
+> key as KEY (§9); the board's colors come from the value (`ansi`).
+>
+>     termplate run sudoku.termplate
+
+app SUDOKU
+- termplate 0.1
+- layout MAIN
+
+vars
+- PUZZLE text "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
+- BOARD text "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
+- ROW number 1 range 1..9
+- COL number 1 range 1..9
+- STATUS text "Cells left: 51"
+
+layout MAIN
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
+sssssssssssssssssssssssssssssssssssssss
+
+legend:
+- b GRID size.width 23 size.height 13
+- m MAIN_MENU
+- s STATUS_LINE size.height 2
+
+panels
+- GRID border rounded
+- MAIN_MENU border rounded
+
+> The cells are the `c` characters; the lines between the boxes are
+> picture. Each value line is a row, its words the cells.
+panel GRID
+```
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+──────┼───────┼──────
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+──────┼───────┼──────
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+```
+
+legend:
+- c grid $(awk -v p="$PUZZLE" -v b="$BOARD" 'BEGIN { for (r = 0; r < 9; r++) { l = ""; for (c = 1; c <= 9; c++) { i = r * 9 + c; x = substr(b, i, 1); l = l (x == "." ? "\033[2m·\033[0m" : substr(p, i, 1) != "." ? "\033[1m" x "\033[0m" : "\033[36m" x "\033[0m") " " } print l } }') ansi cursor ROW COL
+
+panel STATUS_LINE
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
+
+legend:
+- h text SUDOKU.HELP
+- s value $STATUS
+
+menu MAIN_MENU
+- NEW "New puzzle"
+- RESTART "Start over"
+- QUIT "Quit"
+
+keys MAIN
+- PUT 1 2 3 4 5 6 7 8 9 0 backspace delete
+- NEW n
+- quit q
+
+text en
+SUDOKU.HELP Arrows or hjkl move · 1-9 put · 0 clears · {^NEW} new game
+
+> One command for every digit key: the key arrives as KEY.
+command PUT
+- env PUZZLE=$PUZZLE BOARD=$BOARD ROW=$ROW COL=$COL
+- into BOARD
+- then CHECK
+run:
+```bash
+i=$(( (ROW - 1) * 9 + COL ))
+case $KEY in
+  [1-9]) d=$KEY ;;
+  *) d=. ;;
+esac
+# the puzzle's own digits stay
+[ "${PUZZLE:i-1:1}" != "." ] && d=${PUZZLE:i-1:1}
+printf '%s' "${BOARD:0:i-1}$d${BOARD:i}"
+```
+
+> Conflicts, the cells left, or the end of the game.
+command CHECK
+- env BOARD=$BOARD
+- into STATUS
+run:
+```bash
+conflicts=()
+for n in 0 1 2 3 4 5 6 7 8; do
+  for kind in row col box; do
+    seen=
+    for k in 0 1 2 3 4 5 6 7 8; do
+      case $kind in
+        row) i=$(( n * 9 + k )) ;;
+        col) i=$(( k * 9 + n )) ;;
+        box) i=$(( (n / 3 * 3 + k / 3) * 9 + n % 3 * 3 + k % 3 )) ;;
+      esac
+      d=${BOARD:i:1}
+      [ "$d" = . ] && continue
+      case $seen in
+        *$d*) conflicts+=("$kind $(( n + 1 )): $d") ;;
+      esac
+      seen+=$d
+    done
+  done
+done
+if [ ${#conflicts[@]} -gt 0 ]; then
+  echo "Conflict: ${conflicts[*]}"
+elif [[ $BOARD != *.* ]]; then
+  echo "Solved!"
+else
+  left=${BOARD//[^.]/}
+  echo "Cells left: ${#left}"
+fi
+```
+
+> A random puzzle from the list.
+command NEW
+- into PUZZLE
+- then RESTART
+run:
+```bash
+puzzles=(
+  "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
+  "..3.2.6..9..3.5..1..18.64....81.29..7.......8..67.82....26.95..8..2.3..9..5.1.3.."
+  "4.....8.5.3..........7......2.....6.....8.4......1.......6.3.7.5..2.....1.4......"
+  ".2.6.8...58...97......4....37....5..6.......4..8....13....2......98...36...3.6.9."
+)
+printf '%s' "${puzzles[RANDOM % ${#puzzles[@]}]}"
+```
+
+command RESTART
+- env PUZZLE=$PUZZLE
+- run printf '%s' "$PUZZLE"
+- into BOARD
+- then CHECK

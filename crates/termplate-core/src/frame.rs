@@ -266,13 +266,19 @@ pub fn fit(s: &str, w: usize, align: Align) -> String {
 }
 
 /// Wraps `text` to lines of at most `width` columns, breaking between
-/// words (D 11.4, D 11.5); a word longer than a line is split.
+/// words (D 11.4, D 11.5); a word longer than a line is split. A line that
+/// fits stays as it is, spaces included, so aligned columns survive.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     if width == 0 {
         return lines;
     }
     for para in text.split('\n') {
+        let para = para.trim_end();
+        if str_width(para) <= width {
+            lines.push(para.to_string());
+            continue;
+        }
         let mut line = String::new();
         let mut len = 0;
         for word in para.split(' ').filter(|w| !w.is_empty()) {
@@ -331,6 +337,7 @@ mod tests {
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("ab abcdefgh", 4), ["ab", "abcd", "efgh"]);
         assert_eq!(wrap("", 4), [""]);
+        assert_eq!(wrap(" 5 3 .  │ 7  \nx", 12), [" 5 3 .  │ 7", "x"], "lines that fit keep their spacing");
         assert!(wrap("x", 0).is_empty());
     }
 

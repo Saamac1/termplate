@@ -587,6 +587,193 @@ fn ansi_colors_are_kept_and_drawn() {
     assert_eq!(f.get(0, y + 1).unwrap().style, None, "the plain line");
 }
 
+const KEYED: &str = r#"app K
+- termplate 0.1
+
+vars
+- GRID text
+
+layout MAIN
+bbbbbbbbbbbb
+bbbbbbbbbbbb
+mmmmmmmmmmmm
+
+legend:
+- b BOARD
+- m MAIN_MENU size.height 3
+
+panel BOARD
+xxxxxxxxxxxx
+xxxxxxxxxxxx
+
+legend:
+- x value $GRID ansi right
+
+menu MAIN_MENU
+- QUIT "Quit"
+
+command PUT
+- run ./put.sh
+- then NEXT
+
+command ASK
+- confirm ASK.SURE
+- run ./ask.sh
+
+command NEXT
+- run ./next.sh
+
+keys MAIN
+- PUT 1 2 3 shift+f9
+- ASK a
+"#;
+
+#[test]
+fn key_bound_commands_get_the_key() {
+    let (mut e, mut h) = app_with(model_of(KEYED));
+    typ(&mut e, &mut h, "2");
+    e.handle(&mut h, InputEvent::Key(KeyCode::F(9), Mods { shift: true, ..Default::default() }));
+    let keys = |r: &RunRequest| r.env.iter().find(|(k, _)| k == "KEY").map(|(_, v)| v.clone());
+    let got: Vec<(String, Option<String>)> = h.runs.iter().map(|r| (r.cmdline.clone(), keys(r))).collect();
+    assert_eq!(
+        got,
+        [
+            ("./put.sh".to_string(), Some("2".to_string())),
+            ("./next.sh".to_string(), None),
+            ("./put.sh".to_string(), Some("shift+f9".to_string())),
+            ("./next.sh".to_string(), None),
+        ],
+        "only the command the key started gets KEY"
+    );
+    // through a confirm dialog
+    typ(&mut e, &mut h, "a");
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(keys(h.runs.last().unwrap()).as_deref(), Some("a"));
+    e.run_command(&mut h, "NEXT", None);
+    assert_eq!(keys(h.runs.last().unwrap()), None, "no key, no KEY");
+}
+
+#[test]
+fn value_fields_draw_or_drop_ansi_colors() {
+    use crate::style::{Color, Style};
+    let (mut e, mut h) = app_with(model_of(KEYED));
+    e.set_var("GRID", Value::Text("5 \x1b[1;31m3\x1b[0m  .\nab".into()));
+    e.update(&mut h);
+    let f = e.render();
+    assert_eq!(f.row(0).trim_end(), "      5 3  .", "spacing kept, right aligned");
+    let red = Style { fg: Some(Color::DarkRed), attrs: crate::style::Attrs { bold: true, ..Default::default() }, ..Default::default() };
+    assert_eq!(f.get(8, 0).unwrap().style, Some(red));
+    assert_eq!(f.get(6, 0).unwrap().style, None);
+    let plain = KEYED.replace("$GRID ansi right", "$GRID");
+    let (mut e, mut h) = app_with(model_of(&plain));
+    e.set_var("GRID", Value::Text("5 \x1b[31m3\x1b[0m".into()));
+    e.update(&mut h);
+    let f = e.render();
+    assert_eq!(f.row(0).trim_end(), "5 3", "codes are removed without `ansi`");
+    assert!((0..12).all(|x| f.get(x, 0).unwrap().style.is_none()));
+}
+
+const GRID_APP: &str = r#"app G
+- termplate 0.1
+
+vars
+- GRID text
+- ROW number
+- COL number 9
+
+layout MAIN
+gggggggg
+mmmmmmmm
+
+legend:
+- g BOARD
+- m MAIN_MENU size.height 2
+
+panel BOARD
+a a a │
+a a a │
+
+legend:
+- a grid $GRID cursor ROW COL then PICK
+
+menu MAIN_MENU
+- QUIT "Quit"
+
+command PICK
+- run ./pick.sh
+- env ROW=$ROW COL=$COL
+"#;
+
+fn grid_app() -> (Engine, TestHost) {
+    let (mut e, mut h) = app_with(model_of(GRID_APP));
+    e.set_var("GRID", Value::Text("1 2 3\n4 . 6".into()));
+    e.update(&mut h);
+    (e, h)
+}
+
+fn cursor(e: &Engine) -> (String, String) {
+    (e.var("ROW").unwrap().to_text(), e.var("COL").unwrap().to_text())
+}
+
+#[test]
+fn grid_draws_cells_and_the_cursor() {
+    let (mut e, _) = grid_app();
+    assert_eq!(cursor(&e), ("1".into(), "3".into()), "the cursor starts inside the grid");
+    let f = e.render();
+    assert_eq!(f.row(0).trim_end(), "1 2 3 │");
+    assert_eq!(f.row(1).trim_end(), "4 . 6 │");
+    assert_eq!(f.get(4, 0).unwrap().role, Role::Selected, "the focused grid shows its cursor");
+    assert_eq!(f.get(0, 0).unwrap().role, Role::Field);
+    assert_eq!(stack_names(&e).last().map(String::as_str), Some("GRID"));
+}
+
+#[test]
+fn grid_keys_move_the_cursor_and_confirm_runs_then() {
+    let (mut e, mut h) = grid_app();
+    for k in ["j", "j", "h", "h", "h"] {
+        typ(&mut e, &mut h, k);
+    }
+    assert_eq!(cursor(&e), ("2".into(), "1".into()), "the cursor stops at the edges");
+    key(&mut e, &mut h, KeyCode::End);
+    key(&mut e, &mut h, KeyCode::Up);
+    assert_eq!(cursor(&e), ("1".into(), "3".into()));
+    key(&mut e, &mut h, KeyCode::Enter);
+    let run = h.runs.last().unwrap();
+    assert_eq!(run.cmdline, "./pick.sh");
+    assert!(run.env.contains(&("ROW".into(), "1".into())) && run.env.contains(&("COL".into(), "3".into())), "{:?}", run.env);
+}
+
+#[test]
+fn grid_click_picks_then_confirms_a_cell() {
+    let (mut e, mut h) = grid_app();
+    e.render();
+    e.handle(&mut h, InputEvent::click(2, 1));
+    assert_eq!(cursor(&e), ("2".into(), "2".into()));
+    assert!(h.runs.is_empty());
+    e.render();
+    e.handle(&mut h, InputEvent::click(2, 1));
+    assert_eq!(h.runs.len(), 1, "a click on the picked cell confirms it");
+}
+
+#[test]
+fn grid_in_widget_and_serve_mode() {
+    let src = GRID_APP.replace("app G\n- termplate 0.1\n", "app G\n- termplate 0.1\n- layout MAIN\n");
+    let mut h = TestHost::new();
+    let mut e = Engine::new(model_of(&src), Mode::Widget);
+    e.set_size(40, 10);
+    e.start_widget(&mut h, "BOARD").unwrap();
+    typ(&mut e, &mut h, "j");
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert_eq!(e.take_effects(), [Effect::Exit { code: 0, output: Some("2 3".into()) }]);
+    assert!(h.runs.is_empty(), "widget mode prints the cell instead of `then`");
+    let mut e = Engine::new(model_of(&src), Mode::Serve);
+    e.set_size(40, 10);
+    e.start_widget(&mut h, "BOARD").unwrap();
+    key(&mut e, &mut h, KeyCode::Enter);
+    assert!(e.take_effects().contains(&Effect::Event(Event::new("select", "BOARD", Some("1 3")))));
+    assert!(h.runs.is_empty(), "the script handles the selection");
+}
+
 #[test]
 fn texts_resolve_key_placeholders() {
     let (e, _) = app();

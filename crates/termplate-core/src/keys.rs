@@ -83,6 +83,38 @@ impl Binding {
     pub fn mouse(m: Mouse) -> Binding {
         Binding::Mouse(m, Mods::default())
     }
+
+    /// The binding as written in a `keys` block (`ctrl+q`, `enter`, `1`):
+    /// what [`parse_binding`] reads back.
+    pub fn name(&self) -> String {
+        let (mods, base) = match self {
+            Binding::Mouse(m, md) => (md, match m {
+                Mouse::Click => "click".to_string(),
+                Mouse::RightClick => "rclick".into(),
+                Mouse::MiddleClick => "mclick".into(),
+                Mouse::WheelUp => "wheel.up".into(),
+                Mouse::WheelDown => "wheel.down".into(),
+            }),
+            Binding::Key(code, md) => (md, match code {
+                KeyCode::Char(' ') => "space".to_string(),
+                KeyCode::Char('+') => "plus".into(),
+                KeyCode::Char('-') => "minus".into(),
+                KeyCode::Char(c) => c.to_string(),
+                KeyCode::F(n) => format!("f{n}"),
+                KeyCode::BackTab => "shift+tab".into(),
+                KeyCode::PageUp => "pageup".into(),
+                KeyCode::PageDown => "pagedown".into(),
+                other => format!("{other:?}").to_ascii_lowercase(),
+            }),
+        };
+        let mut out = String::new();
+        for (on, m) in [(mods.ctrl, "ctrl+"), (mods.alt, "alt+"), (mods.shift, "shift+")] {
+            if on {
+                out.push_str(m);
+            }
+        }
+        out + &base
+    }
 }
 
 pub fn parse_binding(s: &str) -> Result<Binding, String> {
@@ -217,7 +249,7 @@ pub fn canonical_action(a: &str) -> &str {
 }
 
 /// Engine contexts (RLML has more; Termplate uses these).
-pub const BUILTIN_CONTEXTS: &[&str] = &["ALWAYS", "MENU", "INPUT", "LOG"];
+pub const BUILTIN_CONTEXTS: &[&str] = &["ALWAYS", "MENU", "INPUT", "LOG", "GRID"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -252,6 +284,15 @@ pub const DEFAULT_KEYS: &[(&str, &str, &[&str])] = &[
     ("LOG", "home", &["home"]),
     ("LOG", "end", &["end"]),
     ("LOG", "back", &["esc"]),
+    // a grid's cursor (spec §5.1), as RLML's `LOOK` without diagonals
+    ("GRID", "up", &["up", "k"]),
+    ("GRID", "down", &["down", "j"]),
+    ("GRID", "left", &["left", "h"]),
+    ("GRID", "right", &["right", "l"]),
+    ("GRID", "home", &["home"]),
+    ("GRID", "end", &["end"]),
+    ("GRID", "confirm", &["enter", "space"]),
+    ("GRID", "back", &["esc"]),
 ];
 
 /// One entry of the runtime context stack.
@@ -447,6 +488,14 @@ mod tests {
         assert!(parse_binding("hyper+x").is_err());
         assert!(parse_binding("foo").is_err());
         assert!(parse_binding("f99").is_err());
+    }
+
+    #[test]
+    fn names_read_back() {
+        for s in ["1", "q", "Q", "?", "enter", "esc", "ctrl+q", "alt+shift+left", "shift+tab", "f5", "space", "plus", "minus", "pageup", "click", "ctrl+wheel.up"] {
+            assert_eq!(b(s).name(), s, "{s}");
+        }
+        assert_eq!(b("num7").name(), "7");
     }
 
     #[test]

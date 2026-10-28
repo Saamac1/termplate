@@ -87,7 +87,7 @@ legend:
 - Puuttuva mitta täyttää jäljelle jäävän tilan. Piirros on pienin sallittu koko.
 - Alueeseen sijoitetaan paneeli, valikko (uusi: RLML:ssä valikot ovat vain modaaleja), loki tai tulosteen näkymä.
 - **Uutta:** `- m MAIN_MENU` upottaa valikon pysyvästi alueeseen; fokus siirtyy alueiden välillä toiminnoilla `next_area` ja `prev_area`.
-- **Numeroidut alueet:** fokusoitavat alueet (valikko, loki, syöte, syötekentällinen paneeli) numeroidaan 1–9 siinä järjestyksessä, jossa ne ovat legendissä. Toiminto `focus N` siirtää fokuksen alueeseen N; modaalin ollessa auki se ei tee mitään. Näppäinrivi: `- focus 2 g`.
+- **Numeroidut alueet:** fokusoitavat alueet (valikko, loki, syöte, syötekentällinen paneeli, kursorillisen ruudukon paneeli) numeroidaan 1–9 siinä järjestyksessä, jossa ne ovat legendissä. Toiminto `focus N` siirtää fokuksen alueeseen N; modaalin ollessa auki se ei tee mitään. Näppäinrivi: `- focus 2 g`.
   - Oletusnäppäimet `ALWAYS`-kontekstissa ovat `alt+N` ja `fN`. Sovelluksen oma `focus N` -rivi korvaa ne, eikä oletusta lisätä näppäimelle, jonka sovellus käyttää jossain kontekstissa.
   - macOS:n Terminalissa Option-näppäin ei oletuksena lähetä `alt`-yhdistelmiä, joten `fN` on varmempi.
   - Pelkät numerot jäävät syötteille.
@@ -115,15 +115,46 @@ legend:
 ```
 
 - Saman merkin vaakajakso on yksirivinen kenttä ja suorakulmio monirivinen. Legendissä mainitsemattomat merkit ovat kuvaa.
+- Monirivinen kenttä rivittää arvon sanojen välistä. Rivi, joka mahtuu kenttään, näytetään sellaisenaan välilyönteineen, joten valmiiksi muotoiltu teksti (taulukko, pelilauta) säilyttää sarakkeensa.
 - **Ei sanoja piirroksessa:** nimiöt ovat `text`-kenttiä (`- disktxt text STATUS.DISK`). Näin piirroksen kirjaimet eivät sekoitu kenttämerkkeihin (RLML D 11.5) ja nimiöt käännetään kuten muutkin tekstit.
 - **Ei reunoja piirroksessa:** reunat ja otsikkorivi tulevat tyylistä (luku 11). Piirros kuvaa vain sisällön. Lataus varoittaa paneelista, jonka piirroksen ensimmäinen ja viimeinen rivi koostuvat reunamerkeistä.
 - **Merkkien leveys:** leveydet lasketaan näyttösarakkeina (Unicode-leveys), ei merkkeinä. Leveä merkki (CJK, emoji) piirroksessa on latausvaroitus kuten RLML:ssä (M 2.5); kenttien arvoissa se on sallittu ja leikataan sarakkeiden mukaan.
 - Kenttälajit: `text AVAIN`, `value LAUSEKE`, `param NIMI` (RLML:stä).
+- **Värit arvossa:** `value LAUSEKE ansi` piirtää arvon ANSI-värit kuten `log … ansi keep` (luku 12). Ilman `ansi`-määrettä ohjaussekvenssit poistetaan. `ansi` kirjoitetaan ennen tasausta: `- b value $BOARD ansi center`.
 - **Uudet kenttälajit:** `bar ARVO of MAKSIMI` (edistymispalkki), `input MUUTTUJA` (muokattava kenttä, luku 8), `spinner when EHTO`.
 - **Päivitys:** RLML laskee arvot joka välikehyksessä; shell-isännässä komennot ovat kalliita, joten paneeli saa `refresh AIKA`, ja ilman sitä arvot lasketaan avattaessa ja muuttujan muuttuessa.
 - Komennot ajetaan taustalla aikakatkaisulla (luku 15). Kenttä näyttää edellisen arvon, kunnes uusi valmistuu, eikä uutta päivitystä aloiteta, ennen kuin edellinen on valmis.
 - Modaalinen paneeli: `open PANEELI(…)`, suljetaan toiminnoilla `confirm` tai `back`.
 - **Pidemmät tunnisteet:** yhden merkin kenttien lisäksi kentän voi merkitä nimellä hakasulkeissa Informix-4GL:n tapaan (`[disk____]`). Hakasulkeet ja täyte kuuluvat kentän leveyteen, ja legendi viittaa kenttään nimellä (`- disk value …`).
+
+#### 5.1 Ruudukko
+
+Ruudukko on paneelin kenttä, jonka solut piirretään kuten muutkin kentät, ja kursori liikkuu niissä. Se on tehty pelilaudoille (sudoku, ristinolla) ja muille taulukoille, joissa valitaan solu. Sama malli palvelee RLML:ää: kursorin toiminnot ovat RLML:n katselukursorin (`LOOK`) toiminnot.
+
+````
+panel BOARD
+```
+c c c │ c c c │ c c c
+c c c │ c c c │ c c c
+──────┼───────┼──────
+c c c │ c c c │ c c c
+```
+
+legend:
+- c grid $VIEW ansi cursor ROW COL then PICK
+````
+
+- **Muoto:** `- MERKKI grid LAUSEKE [ansi] [cursor RIVI SARAKE] [then TOIMINTO]`.
+- **Solut tulevat piirroksesta:** jokainen legendin merkin jakso on solu, ja allekkaiset jaksot ovat eri rivejä. Rivit ja sarakkeet luetaan sijainneista vasemmalta oikealle ja ylhäältä alas. Kaikilla riveillä on oltava yhtä monta solua. Erottimet ja muut merkit ovat kuvaa.
+- **Sisältö:** arvon rivi vastaa ruudukon riviä, ja rivin välilyönnein erotetut sanat ovat solujen sisällöt. Puuttuva sana jättää solun tyhjäksi. Sisältö keskitetään soluun, ja `ansi` piirtää sen värit (luku 5).
+- **Kursori:** `cursor RIVI SARAKE` nimeää kaksi `number`-muuttujaa, joissa on kursorin rivi ja sarake ykkösestä alkaen. Ilman kursoria ruudukko on pelkkä näyttö.
+  - Kursorin muuttujat ovat tavallisia muuttujia: paneelit näkevät ne, ja komento saa ne `env`-riveillä. Muuttujat asetetaan vain, kun kursori liikkuu, ja ruudukon ulkopuoliset alkuarvot siirretään sen sisälle.
+  - Kursorillinen ruudukko tekee paneelista fokusoitavan (luku 4). Kursorin solu korostetaan (`selected`), kun paneelilla on fokus.
+  - Paneelissa saa olla yksi kursorillinen ruudukko, eikä samassa paneelissa voi olla syötekenttiä.
+- **Näppäimet:** konteksti `GRID` (luku 9) on voimassa, kun ruudukolla on fokus. Oletuksena `cursor.north` `up k`, `cursor.south` `down j`, `cursor.west` `left h`, `cursor.east` `right l`, `home` ja `end` rivin alkuun ja loppuun, `confirm` `enter space` ja `back` `esc`. Kursori pysähtyy reunaan. Vinoliikkeitä ei ole.
+- **Hiiri:** klikkaus valitsee solun ja antaa paneelille fokuksen. Klikkaus jo valittuun soluun on `confirm`.
+- **Vahvistus:** `confirm` ajaa `then`-toiminnon. Widget-tilassa (`termplate panel ui.termplate BOARD`) vahvistus tulostaa `RIVI SARAKE` eikä aja `then`-toimintoa. Koprosessitilassa se lähettää tapahtuman `select PANEELI RIVI SARAKE`, ja komennon ajaminen jää skriptille kuten valikoissa.
+- **Lataustarkistukset:** kursorin muuttujat ovat olemassa ja `number`-tyyppiä, `then` vaatii kursorin, rivien solumäärät täsmäävät, ja ruudukossa on ainakin yksi solu.
 
 ### 6. Komennot ja toiminnot
 
@@ -141,7 +172,7 @@ command BACKUP
 
 - `run` ajaa komennon. Parametrit välitetään **aina ympäristömuuttujina**, ei merkkijonoon sijoittamalla (luku 15).
 - `- shell TULKKI` valitsee tulkin, jolla `run` ajetaan: `sh` (oletus), `bash`, `zsh` tai polku tulkkiin. Yksirivinen `run` ajetaan muodossa `TULKKI -c RIVI`. Monirivinen skripti kirjoitetaan `run:`-alilohkoon (luku 6.1).
-- **Ympäristö:** komento perii Termplaten oman ympäristön, ja siihen lisätään vain `env`-rivien muuttujat, listavalikon valinta `IT` (luku 7.1) ja `- secret NIMI env` -rivillä pyydetyt salaiset arvot. Muut `vars`-muuttujat ja parametrit eivät näy komennolle, ellei niitä nimetä `env`-rivillä.
+- **Ympäristö:** komento perii Termplaten oman ympäristön, ja siihen lisätään vain `env`-rivien muuttujat, listavalikon valinta `IT` (luku 7.1), näppäimellä käynnistetyn komennon näppäin `KEY` (luku 9) ja `- secret NIMI env` -rivillä pyydetyt salaiset arvot. Muut `vars`-muuttujat ja parametrit eivät näy komennolle, ellei niitä nimetä `env`-rivillä.
 - **Lausekkeiden ympäristö:** lausekkeiden `$( … )`-korvaukset (luku 3) saavat tarkoituksella kaikki muuttujat, parametrit, `$it`:n ja `$VALUE`:n, jotta `ok $(test -d "$TARGET")` toimii ilman `env`-rivejä. Nekin saavat arvot ympäristömuuttujina, eivät komentoriviin sijoitettuina. Salaisia arvoja lausekkeet eivät saa.
 - `run KOMENTO interactive` antaa koko päätteen ohjelmalle (`$EDITOR`, `less`, `ssh`): Termplate keskeyttää piirron, ja käyttöliittymä palaa, kun ohjelma päättyy.
 - `- window [tab|split|popup]` ajaa komennon erillisessä ikkunassa odottamatta sitä (luku 15.1).
@@ -292,8 +323,9 @@ keys MAIN
 - BACKUP b
 ```
 
-- Kontekstit pinoutuvat; `ALWAYS` on aina voimassa, `MENU` valikoissa ja modaaleissa.
+- Kontekstit pinoutuvat; `ALWAYS` on aina voimassa, `MENU` valikoissa ja modaaleissa, `INPUT` syötteissä ja lomakkeissa, `LOG` lokeissa ja `GRID` ruudukoissa (luku 5.1).
 - Näppäin voi sitoa komennon suoraan (`- BACKUP b`).
+- **Näppäin komennolle:** suoraan sidottu komento saa painetun näppäimen ympäristömuuttujana `KEY` siinä muodossa kuin se kirjoitetaan `keys`-lohkoon (`1`, `enter`, `ctrl+q`, `click`). Näin yksi komento palvelee monta näppäintä: `- PUT 1 2 3 4 5 6 7 8 9`. `KEY` kulkee myös vahvistuksen (`confirm`) läpi, mutta ei komennon ketjuun (`then`, `on_error`) eikä komentoihin, joihin sisäinen toiminto johtaa (esimerkiksi `confirm` → syötteen `then`).
 - **Kursoritoiminnot** nimetään kuten RLML:ssä: `cursor.north`, `cursor.south`, `cursor.west`, `cursor.east`. Lyhyet nimet `up`, `down`, `left`, `right` hyväksytään synonyymeinä, mutta `check` ja tekstien `{^…}` käyttävät RLML-nimiä.
 - Tekstien `{^confirm}`-paikkamerkki näyttää nykyisen sidonnan (luku 10).
 - **Ei peliohjainta:** RLML:n `pad`-osiota ei tueta. Termplate-tiedostossa `pad`-lohko on latausvirhe. Steam Deckin kaltaisilla laitteilla Steam Input voi muuttaa ohjaimen näppäimistö- ja hiirisyötteeksi.
@@ -302,7 +334,7 @@ keys MAIN
 
 Hiiri on lisäsyöte: kaiken voi tehdä myös näppäimistöllä. Sama koskee shell- ja RLML-isäntää.
 
-- Klikkaus valitsee valikon kohdan tai listarivin ja siirtää fokuksen alueeseen.
+- Klikkaus valitsee valikon kohdan, listarivin tai ruudukon solun ja siirtää fokuksen alueeseen.
 - Rulla vierittää listaa, lokia ja monirivistä kenttää.
 - Klikkaus `input`-kenttään aloittaa muokkauksen.
 - Hiiritapahtumat (`click`, `wheel`) sidotaan `keys`-lohkossa kuten näppäimet (`- confirm enter click`), joten käyttäjä voi ohittaa ne.
@@ -410,7 +442,7 @@ done
 ```
 
 - Isännältä: `set`, `open`, `close`, `log`, `refresh`, `busy on|off`, `quit`.
-- Isännälle: `select VALIKKO KOHTA`, `input SYÖTE ARVO`, `submit LOMAKE` (lomakkeen jokaisen kentän `input`-tapahtuman jälkeen), `key TOIMINTO`, `closed VALIKKO`, `emit NIMI`.
+- Isännälle: `select VALIKKO KOHTA`, `select PANEELI RIVI SARAKE` (ruudukko, luku 5.1), `input SYÖTE ARVO`, `submit LOMAKE` (lomakkeen jokaisen kentän `input`-tapahtuman jälkeen), `key TOIMINTO`, `closed VALIKKO`, `emit NIMI`.
 - Arvo on rivin loppu; rivinvaihdot ja kenoviivat koodataan (`\n`, `\\`).
 - Protokolla on oletuksena rivipohjainen. Valitsin `--json` vaihtaa sen JSON Linesiksi muita kieliä varten.
 
@@ -508,12 +540,13 @@ trait Host {
 
 Ei avoimia kysymyksiä.
 
-Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13), testitila ilman päätettä (luku 14.4).
+Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13), testitila ilman päätettä (luku 14.4), näppäin komennolle `KEY` (luku 9), värit paneelin arvossa (luku 5), ruudukko ja klikattavat solut (luku 5.1).
 
 ### Liite B. Esimerkit
 
 - `examples/backup`: luvun 2–12 esimerkkisovellus.
 - `examples/filemanager`: kaksipaneelinen tiedostonhallinta Midnight Commanderin tapaan: listavalikot `filter`/`multi`/`keep`, paneelikohtaiset näppäinkontekstit, näppäinkomennot valituille riveille, `run … interactive` katseluun ja muokkaukseen.
+- `examples/sudoku`: sudoku yhdessä tiedostossa: ruudukko kursoreineen (luku 5.1), numeronäppäimet yhdellä komennolla (`KEY`, luku 9), värit arvossa (`ansi`) ja upotetut bash-skriptit (luku 6.1).
 - `examples/ollamaplate`: Ollaman käyttöliittymä: palvelin taustakomentona (`stop`), mallilista, ladatut mallit päivittyvässä paneelissa ja keskustelu asettelun syötteellä (`then`, `clear`), jonka vastaus virtaa lokiin.
 
 ### Liite A. Vastaavuus RLML:ään
@@ -523,7 +556,7 @@ Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-t
 | `app` | `game` | vähemmän kenttiä |
 | `vars` | kartan `vars:`, `game` | tyypitetyt muuttujat |
 | `layout` | D 11.1 | valikko alueeseen |
-| `panel` | D 11.5 | `refresh`, `bar`, `input` |
+| `panel` | D 11.5 | `refresh`, `bar`, `input`, `grid` |
 | `menu`, `list` | D 11.2 | `filter`, `multi` |
 | `command` | RogueScriptin `command` | `run`, `run:`, `shell`, `env`, `output`, `window` |
 | `input` | `ask`, luku- ja tekstisyöte | `validate`, lajit |

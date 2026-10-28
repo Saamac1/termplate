@@ -127,7 +127,13 @@ pub struct LayoutDef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldKind {
     Text { key: String, params: Vec<(String, Expr)> },
-    Value { expr: Expr },
+    /// `ansi`: the value's ANSI colors are drawn, otherwise removed.
+    Value { expr: Expr, ansi: bool },
+    /// A grid of cells (spec §5.1): every run of the legend character is a
+    /// cell, `cells` row by row. The value's lines are the rows, split at
+    /// spaces. With `cursor`, the numbers in the two variables (1-based
+    /// row and column) are a cursor the keys and the mouse move.
+    Grid { expr: Expr, ansi: bool, cells: Vec<Vec<Rect>>, cursor: Option<(String, String)>, then: Option<Action> },
     Param { name: String },
     Bar { value: Expr, max: Expr },
     /// Editable field; `input` names an `input` block (an implicit text
@@ -172,6 +178,11 @@ impl PanelDef {
 
     pub fn is_form(&self) -> bool {
         self.fields.iter().any(|f| matches!(f.kind, FieldKind::Input { .. }))
+    }
+
+    /// The panel's grid with a cursor (spec §5.1); such a panel takes focus.
+    pub fn cursor_grid(&self) -> Option<&FieldDef> {
+        self.fields.iter().find(|f| matches!(f.kind, FieldKind::Grid { cursor: Some(_), .. }))
     }
 }
 
@@ -996,7 +1007,12 @@ fn build_panel(bld: &mut Builder, b: &RawBlock) -> Option<PanelDef> {
                 let tparams = if stop > 3 { parse_named(bld, item, 3, stop) } else { vec![] };
                 FieldKind::Text { key, params: tparams }
             }
-            "value" => FieldKind::Value { expr: bld.expr(item.span(2, end), item, ExprKind::Value) },
+            "value" => {
+                // `ansi` before the alignment keeps the value's colors (spec §5)
+                let ansi = end > 3 && item.tokens[end - 1].is("ansi");
+                let stop = if ansi { end - 1 } else { end };
+                FieldKind::Value { expr: bld.expr(item.span(2, stop), item, ExprKind::Value), ansi }
+            }
             "param" => match item.tokens.get(2) {
                 Some(p) if end == 3 => {
                     if !params.iter().any(|x| x.name == p.text) {
@@ -1036,6 +1052,10 @@ fn build_panel(bld: &mut Builder, b: &RawBlock) -> Option<PanelDef> {
                     continue;
                 }
             },
+            "grid" => {
+                let Some(kind) = build_grid(bld, item, &det.fields) else { continue };
+                kind
+            }
             "spinner" => {
                 if !item.tokens.get(2).is_some_and(|t| t.is("when")) {
                     bld.err(item.err("`spinner when CONDITION`"));
@@ -1049,13 +1069,96 @@ fn build_panel(bld: &mut Builder, b: &RawBlock) -> Option<PanelDef> {
             }
         };
         let rects = det.fields.iter().filter(|f| f.name == item.key()).map(|f| f.rect).collect();
+        // grid cells center their content
+        let align = if matches!(kind, FieldKind::Grid { .. }) { Align::Center } else { align };
         fields.push(FieldDef { name: item.key().to_string(), kind, align, rects });
     }
     let def = PanelDef { name: b.name.clone(), params, refresh, then, picture: det.picture, width: det.width, height: det.height, fields };
     if def.then.is_some() && !def.is_form() {
         bld.err(b.err(format!("panel `{}` has `then` but no input fields", b.name)));
     }
+    let cursor_grids = def.fields.iter().filter(|f| matches!(f.kind, FieldKind::Grid { cursor: Some(_), .. })).count();
+    if cursor_grids > 1 {
+        bld.err(b.err(format!("panel `{}` has more than one grid with a cursor", b.name)));
+    }
+    if cursor_grids > 0 && def.is_form() {
+        bld.err(b.err(format!("panel `{}` cannot have both input fields and a grid with a cursor", b.name)));
+    }
     Some(def)
+}
+
+/// `- c grid EXPR [ansi] [cursor ROW COL] [then ACTION]` (spec §5.1).
+fn build_grid(bld: &mut Builder, item: &RawItem, detected: &[panel::FieldPos]) -> Option<FieldKind> {
+    let t = &item.tokens;
+    let end = t.len();
+    let then_at = (3..end).find(|&i| t[i].is("then"));
+    let opts_end = then_at.unwrap_or(end);
+    let cursor_at = (3..opts_end).find(|&i| t[i].is("cursor"));
+    let mut expr_end = cursor_at.unwrap_or(opts_end);
+    let ansi = expr_end > 3 && t[expr_end - 1].is("ansi");
+    if ansi {
+        expr_end -= 1;
+    }
+    if expr_end <= 2 {
+        bld.err(item.err("`grid VALUE [ansi] [cursor ROW COL] [then ACTION]`"));
+        return None;
+    }
+    let expr = bld.expr(item.span(2, expr_end), item, ExprKind::Value);
+    let cursor = match cursor_at {
+        Some(i) if opts_end == i + 3 => {
+            let (row, col) = (t[i + 1].text.clone(), t[i + 2].text.clone());
+            for v in [&row, &col] {
+                match bld.vars.get(v) {
+                    Some(VarType::Number { .. }) => {}
+                    Some(_) => bld.err(item.err(format!("a grid cursor needs number variables, `{v}` is not one"))),
+                    None => bld.err(item.err(format!("unknown variable `{v}`"))),
+                }
+            }
+            Some((row, col))
+        }
+        Some(_) => {
+            bld.err(item.err("`cursor ROW COL` names two number variables"));
+            return None;
+        }
+        None => None,
+    };
+    let then = match then_at {
+        Some(i) if cursor.is_none() => {
+            bld.err(item.err("a grid's `then` needs a `cursor`"));
+            parse_action(bld, item, i + 1, end)
+        }
+        Some(i) if i + 1 < end => parse_action(bld, item, i + 1, end),
+        Some(_) => {
+            bld.err(item.err("missing action after `then`"));
+            None
+        }
+        None => None,
+    };
+    // Cells: the field's runs, row by row, left to right. Detection joins
+    // runs stacked in consecutive rows into one rectangle; in a grid each
+    // row of it is a row of cells.
+    let mut rects: Vec<Rect> = detected
+        .iter()
+        .filter(|f| f.name == item.key())
+        .flat_map(|f| (0..f.rect.h).map(move |dy| Rect::new(f.rect.x, f.rect.y + dy, f.rect.w, 1)))
+        .collect();
+    rects.sort_by_key(|r| (r.y, r.x));
+    let mut cells: Vec<Vec<Rect>> = Vec::new();
+    for r in rects {
+        match cells.last_mut() {
+            Some(row) if row[0].y == r.y => row.push(r),
+            _ => cells.push(vec![r]),
+        }
+    }
+    if cells.is_empty() {
+        bld.err(item.err(format!("grid `{}` has no cells in the drawing", item.key())));
+        return None;
+    }
+    if cells.iter().any(|row| row.len() != cells[0].len()) {
+        bld.err(item.err(format!("every row of grid `{}` needs the same number of cells", item.key())));
+        return None;
+    }
+    Some(FieldKind::Grid { expr, ansi, cells, cursor, then })
 }
 
 /// Parses an action from `item.tokens[from..to]`.

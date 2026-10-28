@@ -46,6 +46,7 @@ EOF
 - [`examples/backup`](examples/backup): the spec's example application.
 - [`examples/filemanager`](examples/filemanager): a two-panel file manager in the style of Midnight Commander.
 - [`examples/ollamaplate`](examples/ollamaplate): start Ollama, choose a model and chat.
+- [`examples/sudoku`](examples/sudoku): Sudoku in one file: a grid with a cursor, digit keys through one command (`KEY`), colours, embedded bash.
 
 ## Tests
 
