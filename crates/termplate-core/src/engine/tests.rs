@@ -775,6 +775,20 @@ fn grid_in_widget_and_serve_mode() {
 }
 
 #[test]
+fn start_runs_once_before_the_first_screen() {
+    let src = GRID_APP.replace("app G\n- termplate 0.1\n", "app G\n- termplate 0.1\n- start PICK\n");
+    let (_, h) = app_with(model_of(&src));
+    assert_eq!(h.runs.len(), 1);
+    assert_eq!(h.runs[0].cmdline, "./pick.sh");
+    let src = src.replace("- start PICK\n", "- layout MAIN\n- start PICK\n");
+    let mut h = TestHost::new();
+    let mut e = Engine::new(model_of(&src), Mode::Widget);
+    e.set_size(40, 10);
+    e.start_widget(&mut h, "BOARD").unwrap();
+    assert_eq!(h.runs.len(), 1, "widget mode too");
+}
+
+#[test]
 fn texts_resolve_key_placeholders() {
     let (e, _) = app();
     assert_eq!(e.text("HELP", &BTreeMap::new()), "Paina Enter");

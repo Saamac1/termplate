@@ -1,19 +1,22 @@
 > Sudoku: a whole application in one file (spec §2). The grid (§5.1) shows
 > the board and moves the cursor; digit keys run one command that gets the
-> key as KEY (§9); the board's colors come from the value (`ansi`).
+> key as KEY (§9); RENDER draws the board with colors (`ansi`) when the
+> program starts (`start`) and after every change.
 >
 >     termplate run sudoku.termplate
 
 app SUDOKU
 - termplate 0.1
 - layout MAIN
+- start RENDER
 
 vars
 - PUZZLE text "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
 - BOARD text "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79"
 - ROW number 1 range 1..9
 - COL number 1 range 1..9
-- STATUS text "Cells left: 51"
+- VIEW text
+- STATUS text
 
 layout MAIN
 bbbbbbbbbbbbbbbbbbbbbbbmmmmmmmmmmmmmmmm
@@ -58,7 +61,7 @@ c c c │ c c c │ c c c
 ```
 
 legend:
-- c grid $(awk -v p="$PUZZLE" -v b="$BOARD" 'BEGIN { for (r = 0; r < 9; r++) { l = ""; for (c = 1; c <= 9; c++) { i = r * 9 + c; x = substr(b, i, 1); l = l (x == "." ? "\033[2m·\033[0m" : substr(p, i, 1) != "." ? "\033[1m" x "\033[0m" : "\033[36m" x "\033[0m") " " } print l } }') ansi cursor ROW COL
+- c grid $VIEW ansi cursor ROW COL
 
 panel STATUS_LINE
 hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
@@ -85,7 +88,7 @@ SUDOKU.HELP Arrows or hjkl move · 1-9 put · 0 clears · {^NEW} new game
 command PUT
 - env PUZZLE=$PUZZLE BOARD=$BOARD ROW=$ROW COL=$COL
 - into BOARD
-- then CHECK
+- then RENDER
 run:
 ```bash
 i=$(( (ROW - 1) * 9 + COL ))
@@ -96,6 +99,54 @@ esac
 # the puzzle's own digits stay
 [ "${PUZZLE:i-1:1}" != "." ] && d=${PUZZLE:i-1:1}
 printf '%s' "${BOARD:0:i-1}$d${BOARD:i}"
+```
+
+> The board as nine rows of nine cells: the puzzle's digits bold, the
+> player's cyan, digits that clash in a row, column or box red.
+command RENDER
+- env PUZZLE=$PUZZLE BOARD=$BOARD
+- into VIEW
+- then CHECK
+run:
+```bash
+bad=()
+for n in 0 1 2 3 4 5 6 7 8; do
+  for kind in row col box; do
+    at=()
+    for k in 0 1 2 3 4 5 6 7 8; do
+      case $kind in
+        row) i=$(( n * 9 + k )) ;;
+        col) i=$(( k * 9 + n )) ;;
+        box) i=$(( (n / 3 * 3 + k / 3) * 9 + n % 3 * 3 + k % 3 )) ;;
+      esac
+      d=${BOARD:i:1}
+      [ "$d" = . ] && continue
+      if [ -n "${at[d]}" ]; then
+        bad[i]=1
+        bad[at[d] - 1]=1
+      else
+        at[d]=$(( i + 1 ))
+      fi
+    done
+  done
+done
+for r in 0 1 2 3 4 5 6 7 8; do
+  line=
+  for c in 0 1 2 3 4 5 6 7 8; do
+    i=$(( r * 9 + c ))
+    d=${BOARD:i:1}
+    if [ "$d" = . ]; then
+      line+=$'\e[2m·\e[0m '
+    elif [ -n "${bad[i]}" ]; then
+      line+=$'\e[31m'"$d"$'\e[0m '
+    elif [ "${PUZZLE:i:1}" != . ]; then
+      line+=$'\e[1m'"$d"$'\e[0m '
+    else
+      line+=$'\e[36m'"$d"$'\e[0m '
+    fi
+  done
+  echo "$line"
+done
 ```
 
 > Conflicts, the cells left, or the end of the game.
@@ -152,4 +203,4 @@ command RESTART
 - env PUZZLE=$PUZZLE
 - run printf '%s' "$PUZZLE"
 - into BOARD
-- then CHECK
+- then RENDER

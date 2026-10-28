@@ -348,15 +348,24 @@ impl Engine {
             }
         }
         self.focus = self.focusables().first().copied().unwrap_or(0);
+        self.run_start(host);
         self.dirty = true;
         self.update(host);
         Ok(())
+    }
+
+    /// The app's `start` action, once, before the first screen (spec §2).
+    fn run_start(&mut self, host: &mut dyn Host) {
+        if let Some(a) = self.model.app.start.clone() {
+            self.perform(host, &a, None);
+        }
     }
 
     /// Starts with a single widget (a menu, input or panel) as the root.
     /// A list menu with no rows and no `<MENU>.EMPTY` text is not opened
     /// (D 11.2); the widget then ends with status 1.
     pub fn start_widget(&mut self, host: &mut dyn Host, target: &str) -> Result<(), String> {
+        self.run_start(host);
         if !self.open(host, target, BTreeMap::new())? {
             self.effects.push(Effect::Exit { code: 1, output: None });
         }

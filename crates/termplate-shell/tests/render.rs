@@ -215,6 +215,8 @@ fn interactive_commands_run_without_a_terminal() {
 fn sudoku_example() {
     let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sudoku");
     let steps = "\
+wait
+expect 5 3 ·
 expect Cells left: 51
 key l l
 type 4

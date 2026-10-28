@@ -41,6 +41,7 @@ include text/*
 ```
 
 - **Versio:** juuritiedoston `app`-lohkossa on pakollinen kenttä `- termplate VERSIO`. Lataus hylkää tiedoston, jonka versiota toteutus ei tue, ja puuttuva kenttä on latausvirhe.
+- **Käynnistys:** `- start TOIMINTO` ajetaan kerran, kun ohjelma käynnistyy, kaikissa tiloissa ennen ensimmäistä näkymää. Toiminto on mikä tahansa luvun 6 toiminto, tavallisesti komento, joka laskee alkutilan muuttujiin (`- into`). Taustalla ajettava komento ei viivästytä näkymää: kentät päivittyvät, kun se valmistuu.
 - **Widget-tiedostot:** widget-tilassa (luku 14.1) `app`-lohko on valinnainen. Ilman sitä sovelluksen nimi on tiedostonimi isoin kirjaimin (`ui.termplate` → `UI`), versioksi oletetaan uusin tuettu, ja `termplate check` varoittaa puuttuvasta versiosta. Sovellus- ja koprosessitila vaativat `app`-lohkon.
 - **Yhden tiedoston sovellus:** `include` on valinnainen. Koko sovellus voi olla yhdessä tiedostossa: kaikki lohkot, tekstit (oletustekstit ja `text LANG` -lohkot, luku 10), tyyli (luku 11) ja skriptit (`run:`-alilohkot, luku 6.1). Sovellustiedoston ulkopuolelle jäävät vain käyttäjän ohitukset ja asetukset (luku 13), koska ne kuuluvat käyttäjälle.
 
@@ -540,20 +541,20 @@ trait Host {
 
 Ei avoimia kysymyksiä.
 
-Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13), testitila ilman päätettä (luku 14.4), näppäin komennolle `KEY` (luku 9), värit paneelin arvossa (luku 5), ruudukko ja klikattavat solut (luku 5.1).
+Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13), testitila ilman päätettä (luku 14.4), näppäin komennolle `KEY` (luku 9), värit paneelin arvossa (luku 5), ruudukko ja klikattavat solut (luku 5.1), käynnistystoiminto `start` (luku 2).
 
 ### Liite B. Esimerkit
 
 - `examples/backup`: luvun 2–12 esimerkkisovellus.
 - `examples/filemanager`: kaksipaneelinen tiedostonhallinta Midnight Commanderin tapaan: listavalikot `filter`/`multi`/`keep`, paneelikohtaiset näppäinkontekstit, näppäinkomennot valituille riveille, `run … interactive` katseluun ja muokkaukseen.
-- `examples/sudoku`: sudoku yhdessä tiedostossa: ruudukko kursoreineen (luku 5.1), numeronäppäimet yhdellä komennolla (`KEY`, luku 9), värit arvossa (`ansi`) ja upotetut bash-skriptit (luku 6.1).
+- `examples/sudoku`: sudoku yhdessä tiedostossa: ruudukko kursoreineen (luku 5.1), numeronäppäimet yhdellä komennolla (`KEY`, luku 9), laudan piirto käynnistyksessä (`start`, luku 2), värit arvossa (`ansi`) ja upotetut bash-skriptit (luku 6.1).
 - `examples/ollamaplate`: Ollaman käyttöliittymä: palvelin taustakomentona (`stop`), mallilista, ladatut mallit päivittyvässä paneelissa ja keskustelu asettelun syötteellä (`then`, `clear`), jonka vastaus virtaa lokiin.
 
 ### Liite A. Vastaavuus RLML:ään
 
 | Termplate | RLML | Muutos |
 | --- | --- | --- |
-| `app` | `game` | vähemmän kenttiä |
+| `app` | `game` | vähemmän kenttiä, `start` |
 | `vars` | kartan `vars:`, `game` | tyypitetyt muuttujat |
 | `layout` | D 11.1 | valikko alueeseen |
 | `panel` | D 11.5 | `refresh`, `bar`, `input`, `grid` |

@@ -47,6 +47,16 @@ fn version_is_required_and_checked() {
 }
 
 #[test]
+fn app_start_action() {
+    let m = build("app T\n- termplate 0.1\n- start INIT\n\nvars\n- A text\n\ncommand INIT\n- run ./init.sh\n- into A\n").unwrap();
+    assert_eq!(m.app.start, Some(Action::Command("INIT".into())));
+    let m = build("app T\n- termplate 0.1\n- start set A ready\n\nvars\n- A text\n").unwrap();
+    assert!(matches!(m.app.start, Some(Action::Set { ref var, .. }) if var == "A"));
+    assert!(build("app T\n- termplate 0.1\n- start NOPE\n").unwrap_err().to_string().contains("unknown command `NOPE`"));
+    assert!(build("app T\n- termplate 0.1\n- start\n").unwrap_err().to_string().contains("`start ACTION`"));
+}
+
+#[test]
 fn missing_or_duplicate_app() {
     assert!(build("menu M\n- QUIT\n").unwrap_err().to_string().contains("missing `app` block"));
     assert!(build("app A\n- termplate 0.1\n\napp B\n- termplate 0.1\n").unwrap_err().to_string().contains("only one"));

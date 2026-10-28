@@ -31,6 +31,8 @@ pub struct App {
     pub workdir: Option<String>,
     /// Base key context (D 3.3 `keys`); defaults to the layout name.
     pub keys: Option<String>,
+    /// Runs once when the program starts (spec §2).
+    pub start: Option<Action>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -566,6 +568,14 @@ impl Model {
                 _ => unreachable!("syntax only yields known kinds"),
             }
         }
+        // `- start ACTION` refers to commands, variables and widgets.
+        if let Some(item) = apps[0].items.iter().find(|i| i.key() == "start") {
+            if item.tokens.len() < 2 {
+                bld.err(item.err("`start ACTION`"));
+            } else {
+                model.app.start = parse_action(&mut bld, item, 1, item.tokens.len());
+            }
+        }
         for inp in std::mem::take(&mut bld.implicit_inputs) {
             model.inputs.entry(inp.name.clone()).or_insert(inp);
         }
@@ -653,11 +663,15 @@ impl Model {
 }
 
 fn build_app(bld: &mut Builder, b: &RawBlock) -> App {
-    let mut app = App { name: b.name.clone(), version: String::new(), layout: None, language: None, workdir: None, keys: None };
+    let mut app = App { name: b.name.clone(), version: String::new(), layout: None, language: None, workdir: None, keys: None, start: None };
     if !is_name(&b.name) {
         bld.err(b.err(format!("invalid app name `{}`", b.name)));
     }
     for item in &b.items {
+        if item.key() == "start" {
+            // parsed with the other definitions (build_start)
+            continue;
+        }
         let value = item.tokens.get(1).map(|t| t.text.clone());
         let Some(value) = value.filter(|_| item.tokens.len() == 2) else {
             bld.err(item.err(format!("`{}` takes one value", item.key())));
