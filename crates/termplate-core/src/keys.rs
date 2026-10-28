@@ -1,7 +1,7 @@
 //! Key and mouse bindings and context stacking (RLML D 11.3, M 8; spec §9).
 //!
 //! A binding is written `ctrl+q`, `enter`, `k`, `?`, `f5`, `plus`, `num8`,
-//! `click`, `shift+click`, `wheel.up`, or a gamepad button (`pad` blocks).
+//! `click`, `shift+click` or `wheel.up`.
 //! Lookup: `ALWAYS` first (it wins over every other context), then the
 //! context stack from the top down. A `modal` context (the default) stops
 //! the search; a `passthrough` context lets unbound input through.
@@ -50,7 +50,6 @@ pub enum Mouse {
 pub enum Binding {
     Key(KeyCode, Mods),
     Mouse(Mouse, Mods),
-    Pad(String),
 }
 
 impl Binding {
@@ -83,22 +82,6 @@ impl Binding {
 
     pub fn mouse(m: Mouse) -> Binding {
         Binding::Mouse(m, Mods::default())
-    }
-}
-
-/// Gamepad buttons (D 11.3): position-based names.
-pub const PAD_BUTTONS: &[&str] = &[
-    "south", "east", "west", "north", "lb", "rb", "lt", "rt", "start", "select", "lstick", "rstick", "dpad.up",
-    "dpad.down", "dpad.left", "dpad.right", "lstick.up", "lstick.down", "lstick.left", "lstick.right", "rstick.up",
-    "rstick.down", "rstick.left", "rstick.right",
-];
-
-/// Parses a gamepad binding (`south`, `lb+start`).
-pub fn parse_pad(s: &str) -> Result<Binding, String> {
-    if s.split('+').all(|b| PAD_BUTTONS.contains(&b)) {
-        Ok(Binding::Pad(s.to_string()))
-    } else {
-        Err(format!("unknown gamepad button `{s}`"))
     }
 }
 
@@ -178,7 +161,6 @@ impl fmt::Display for Binding {
             Ok(())
         };
         match self {
-            Binding::Pad(b) => write!(f, "{b}"),
             Binding::Mouse(m, md) => {
                 mods(f, md)?;
                 f.write_str(match m {
@@ -458,13 +440,6 @@ mod tests {
         assert_eq!(b("wheel.down"), Binding::mouse(Mouse::WheelDown));
         assert_eq!(b("shift+click"), Binding::Mouse(Mouse::Click, Mods { shift: true, ..Default::default() }));
         assert!(parse_binding("wheel_up").is_err());
-    }
-
-    #[test]
-    fn pad_buttons() {
-        assert_eq!(parse_pad("south"), Ok(Binding::Pad("south".into())));
-        assert_eq!(parse_pad("lb+start"), Ok(Binding::Pad("lb+start".into())));
-        assert!(parse_pad("x").is_err());
     }
 
     #[test]

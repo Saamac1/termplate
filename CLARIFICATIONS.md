@@ -210,7 +210,11 @@ Caveats:
 
 **Proposal:** an optional cargo feature `gamepad` (off by default, so normal builds need no udev) plus `settings - pad off`. It is low priority after C1 and C7.
 
+**Decision (28.10.2026):** gamepad support is dropped. A `pad` block is now a load error, and the spec (§9) no longer has it.
+
 - **C17 Termplate settings** in `settings.termplate`: `language`, `theme` (alias `style`), `refresh` (factor), `timeout`, `mouse`. Themes as files (§11) are not implemented. RLML also leaves the style selection open (D 13 "Tyylin rajaus").
+
+**Decision (28.10.2026):** no theme files and no `theme` setting. A theme is a user override that patches `colors` and `panels` (spec §11, §13); `- theme` in settings is a load error that says so.
 
 ** S: this is ok **
 
@@ -253,8 +257,10 @@ Done in code:
 - **C9.** Load warning for a panel drawing that draws its own border. The backup example now uses `text` fields and style borders.
 - **C15.** Text is measured in display columns (`unicode-width`); a wide character takes two cells. Wide characters in drawings give a load warning, and load warnings appear in the app's first log at start.
 
-Still open or not started:
-- Theme files (C17), rendering kept ANSI colours (B11), gamepad input with `gilrs` (C16).
+Later decisions (28.10.2026):
+- Themes are user overrides of `colors` and `panels`, not files (C17).
+- Kept ANSI colours are rendered (B11, spec §12).
+- Gamepad input (C16) was dropped.
 
 Examples (28.10.2026): `examples/filemanager` (Midnight Commander style) and `examples/ollamaplate` (Ollama server, models, chat). Both are run on a pseudo-terminal here. Engine additions they needed, now in the spec:
 - a command run by a key gets the focused list's marked rows (or the cursor row) as `IT`; confirm texts can use `{IT}`;

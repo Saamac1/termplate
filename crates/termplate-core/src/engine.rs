@@ -15,7 +15,7 @@ use crate::layout::Rect;
 use crate::menu::{row_letter, MenuState, Row};
 use crate::model::{Action, Align, Arg, CommandDef, FieldKind, InputKind, MenuKind, Model, SecretMode};
 use crate::protocol::{Event, HostMsg};
-use crate::style::Border;
+use crate::style::{Border, Style};
 use crate::text::TextContext;
 use crate::value::{format_number, Value, VarType, Vars};
 
@@ -76,9 +76,15 @@ struct InputState {
     tabbed: bool,
 }
 
+/// A drawn log line: text, stderr, character styles.
+type LogLine = (String, bool, Option<Vec<Style>>);
+
 #[derive(Debug, Clone, PartialEq)]
 struct LogEntry {
+    /// Without escape sequences.
     text: String,
+    /// `ansi keep`: the style of each character of `text`, when any.
+    styles: Option<Vec<Style>>,
     stderr: bool,
     count: usize,
 }
@@ -428,9 +434,9 @@ impl Engine {
         let (history, merge, more, keep_ansi) = (def.history, def.merge, def.more, def.keep_ansi);
         let log = self.logs.entry(area.to_string()).or_default();
         for line in text.lines() {
-            let line = if keep_ansi { line.to_string() } else { strip_ansi(line) };
+            let (line, styles) = if keep_ansi { crate::ansi::parse(line) } else { (strip_ansi(line), None) };
             if merge
-                && let Some(last) = log.entries.back_mut().filter(|e| e.text == line && e.stderr == stderr) {
+                && let Some(last) = log.entries.back_mut().filter(|e| e.text == line && e.styles == styles && e.stderr == stderr) {
                     last.count += 1;
                     continue;
                 }
@@ -438,7 +444,7 @@ impl Engine {
                 log.unread_from = Some(log.entries.len());
                 log.page = 0;
             }
-            log.entries.push_back(LogEntry { text: line, stderr, count: 1 });
+            log.entries.push_back(LogEntry { text: line, styles, stderr, count: 1 });
         }
         while log.entries.len() > history {
             log.entries.pop_front();
@@ -2011,7 +2017,7 @@ impl Engine {
                     env: self.command_env(&extra, it.as_deref()),
                     stdin,
                     interactive: def.interactive,
-                    timeout: if background { self.model.settings.timeout } else { None },
+                    timeout: if background { def.timeout.or(self.model.settings.timeout) } else { None },
                     workdir: self.model.app.workdir.clone(),
                 };
                 if def.window.is_some() {
@@ -2401,6 +2407,14 @@ impl Engine {
         if e.count > 1 { format!("{} (×{})", e.text, e.count) } else { e.text.clone() }
     }
 
+    /// A log entry wrapped to `w` columns, with the styles of each line's
+    /// characters when it kept its ANSI colors.
+    fn wrap_entry(e: &LogEntry, w: usize) -> Vec<LogLine> {
+        let lines = wrap(&Self::log_text(e), w);
+        let mut styles = e.styles.as_ref().map(|s| crate::ansi::wrap_styles(&lines, &e.text, s).into_iter());
+        lines.into_iter().map(|l| (l, e.stderr, styles.as_mut().and_then(Iterator::next))).collect()
+    }
+
     fn draw_log(&mut self, f: &mut Frame, name: &str, rect: Rect) {
         let more_key = format!("{name}.MORE");
         let more_text =
@@ -2408,19 +2422,20 @@ impl Engine {
         let Some(log) = self.logs.get_mut(name) else { return };
         log.paging = false;
         let role = |stderr: bool| if stderr { Role::Stderr } else { Role::Normal };
+        let line = |f: &mut Frame, y: usize, (l, err, styles): &LogLine| {
+            f.aligned(rect.x, y, rect.w, l, Align::Left, role(*err));
+            if let Some(styles) = styles {
+                f.styled_text(rect.x, y, rect.w, l, role(*err), styles);
+            }
+        };
         // `more` paging: new messages that do not fit are shown in pages,
         // the oldest first, with `<LOG>.MORE` on the last row (D 11.4).
         if let Some(from) = log.unread_from {
-            let lines: Vec<(String, bool)> = log
-                .entries
-                .iter()
-                .skip(from)
-                .flat_map(|e| wrap(&Self::log_text(e), rect.w).into_iter().map(move |l| (l, e.stderr)))
-                .collect();
+            let lines: Vec<LogLine> = log.entries.iter().skip(from).flat_map(|e| Self::wrap_entry(e, rect.w)).collect();
             let per = rect.h.saturating_sub(1).max(1);
             if lines.len() > rect.h && (log.page + 1) * per < lines.len() {
-                for (i, (l, err)) in lines.iter().skip(log.page * per).take(per).enumerate() {
-                    f.aligned(rect.x, rect.y + i, rect.w, l, Align::Left, role(*err));
+                for (i, l) in lines.iter().skip(log.page * per).take(per).enumerate() {
+                    line(f, rect.y + i, l);
                 }
                 f.aligned(rect.x, rect.y + rect.h - 1, rect.w, &more_text, Align::Left, Role::Status);
                 log.paging = true;
@@ -2429,8 +2444,8 @@ impl Engine {
             if lines.len() > rect.h {
                 // last page: show it, then the log is back to normal
                 let start = log.page * per;
-                for (i, (l, err)) in lines.iter().skip(start).take(rect.h).enumerate() {
-                    f.aligned(rect.x, rect.y + i, rect.w, l, Align::Left, role(*err));
+                for (i, l) in lines.iter().skip(start).take(rect.h).enumerate() {
+                    line(f, rect.y + i, l);
                 }
                 log.unread_from = None;
                 return;
@@ -2440,28 +2455,26 @@ impl Engine {
         // Newest at the bottom; a message too tall for the area shows its
         // first lines and is cut with `…` (D 11.4).
         let end = log.entries.len().saturating_sub(log.back);
-        let mut rows: Vec<(String, bool)> = Vec::new();
+        let mut rows: Vec<LogLine> = Vec::new();
         for e in log.entries.iter().take(end).rev() {
             if rows.len() >= rect.h {
                 break;
             }
-            let mut lines = wrap(&Self::log_text(e), rect.w);
+            let mut lines = Self::wrap_entry(e, rect.w);
             let room = rect.h - rows.len();
             if lines.len() > room {
                 lines.truncate(room);
-                let last = lines.last_mut().unwrap();
+                let last = &mut lines.last_mut().unwrap().0;
                 *last = crate::frame::fit(&format!("{last} …"), rect.w, Align::Left).trim_end().to_string();
                 if !last.ends_with('…') {
                     last.push('…');
                 }
             }
-            for l in lines.into_iter().rev() {
-                rows.push((l, e.stderr));
-            }
+            rows.extend(lines.into_iter().rev());
         }
         rows.reverse();
-        for (i, (l, err)) in rows.iter().enumerate() {
-            f.aligned(rect.x, rect.y + i, rect.w, l, Align::Left, role(*err));
+        for (i, l) in rows.iter().enumerate() {
+            line(f, rect.y + i, l);
         }
     }
 

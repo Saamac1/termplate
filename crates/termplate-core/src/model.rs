@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::error::{LoadError, LoadErrors};
 use crate::host::{Expr, ExprKind, Host, Window};
-use crate::keys::{action_alias, parse_binding, parse_pad, Binding, Keymap, Mode, BUILTIN_CONTEXTS, KEY_ACTIONS};
+use crate::keys::{action_alias, parse_binding, Binding, Keymap, Mode, BUILTIN_CONTEXTS, KEY_ACTIONS};
 use crate::layout::{analyze, AreaSize, Dim, Dims, Grid, Rect, SizeCond};
 use crate::names::{self, is_name, is_name_with_variant};
 use crate::panel;
@@ -191,6 +191,8 @@ pub struct CommandDef {
     /// `- shell`, or the script's language tag; `None` is `sh` (spec §6).
     pub shell: Option<String>,
     pub window: Option<Window>,
+    /// `- timeout`; the `timeout` setting when not given (spec §15).
+    pub timeout: Option<Duration>,
     pub interactive: bool,
     pub env: Vec<(String, Expr)>,
     pub output: Option<String>,
@@ -289,7 +291,6 @@ pub struct LogDef {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Settings {
     pub language: Option<String>,
-    pub theme: Option<String>,
     pub refresh_factor: Option<f64>,
     pub timeout: Option<Duration>,
     pub mouse: Option<bool>,
@@ -548,7 +549,7 @@ impl Model {
                     let l = build_log(&mut bld, b);
                     model.logs.insert(l.name.clone(), l);
                 }
-                "keys" | "pad" => build_keys(&mut bld, b, &mut model.keymap),
+                "keys" => build_keys(&mut bld, b, &mut model.keymap),
                 "panels" | "logs" => build_style_rows(&mut bld, b, &mut model.style),
                 "settings" => model.settings = build_settings(&mut bld, b),
                 _ => unreachable!("syntax only yields known kinds"),
@@ -1195,6 +1196,7 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         script: false,
         shell: None,
         window: None,
+        timeout: None,
         interactive: false,
         env: vec![],
         output: None,
@@ -1218,6 +1220,14 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         match item.key() {
             "confirm" => c.confirm = one(bld).map(|k| bld.text_key(item, &k)),
             "shell" => c.shell = one(bld),
+            "timeout" => {
+                if let Some(v) = one(bld) {
+                    match parse_duration(&v) {
+                        Some(d) if !d.is_zero() => c.timeout = Some(d),
+                        _ => bld.err(item.err(format!("bad duration `{v}` (e.g. 30s, 5m)"))),
+                    }
+                }
+            }
             "window" => match item.tokens.get(1..) {
                 Some([]) => c.window = Some(Window::Tab),
                 Some([w]) if Window::parse(&w.text).is_some() => c.window = Window::parse(&w.text),
@@ -1309,7 +1319,9 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         if c.run.is_none() {
             bld.err(b.err("`window` needs `- run` or `run:`"));
         }
-        for (bad, what) in [(c.interactive, "interactive"), (c.output.is_some(), "output"), (c.into.is_some(), "into")] {
+        for (bad, what) in
+            [(c.interactive, "interactive"), (c.output.is_some(), "output"), (c.into.is_some(), "into"), (c.timeout.is_some(), "timeout")]
+        {
             if bad {
                 bld.err(b.err(format!("`window` cannot be combined with `{what}` (spec §15.1)")));
             }
@@ -1317,6 +1329,9 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         if c.secrets.iter().any(|(_, m)| *m == SecretMode::Stdin) {
             bld.err(b.err("`window` cannot take a secret on stdin; use `- secret NAME env`"));
         }
+    }
+    if c.timeout.is_some() && c.interactive {
+        bld.err(b.err("an `interactive` command has no timeout"));
     }
     if c.secrets.iter().filter(|(_, m)| *m == SecretMode::Stdin).count() > 1 {
         bld.err(b.err("only one secret can be passed on stdin"));
@@ -1619,7 +1634,6 @@ fn build_log(bld: &mut Builder, b: &RawBlock) -> LogDef {
 
 fn build_keys(bld: &mut Builder, b: &RawBlock, keymap: &mut Keymap) {
     let ctx = b.name.as_str();
-    let pad = b.kind == "pad";
     if !bld.contexts.contains(ctx) {
         let known: Vec<String> = bld.contexts.iter().cloned().collect();
         bld.err(b.err(format!("unknown key context `{ctx}` (known: {})", known.join(", "))));
@@ -1627,21 +1641,9 @@ fn build_keys(bld: &mut Builder, b: &RawBlock, keymap: &mut Keymap) {
     let mut i = 0;
     while i < b.args.len() {
         match b.args[i].text.as_str() {
-            "modal" if !pad => keymap.set_mode(ctx, Mode::Modal),
-            "passthrough" if !pad => keymap.set_mode(ctx, Mode::Passthrough),
-            "deadzone" if pad => {
-                let ok = b
-                    .args
-                    .get(i + 1)
-                    .and_then(|t| t.text.strip_suffix('%'))
-                    .and_then(|p| p.parse::<u8>().ok())
-                    .is_some_and(|p| p <= 100);
-                if !ok {
-                    bld.err(b.err("`deadzone P%`"));
-                }
-                i += 1;
-            }
-            w => bld.err(b.err(format!("unknown {} option `{w}`", b.kind))),
+            "modal" => keymap.set_mode(ctx, Mode::Modal),
+            "passthrough" => keymap.set_mode(ctx, Mode::Passthrough),
+            w => bld.err(b.err(format!("unknown keys option `{w}`"))),
         }
         i += 1;
     }
@@ -1678,12 +1680,11 @@ fn build_keys(bld: &mut Builder, b: &RawBlock, keymap: &mut Keymap) {
             bld.err(item.err(format!("duplicate action `{action}` in {} {ctx}", b.kind)));
         }
         if t.len() <= keys_from {
-            bld.err(item.err(format!("`{action}` needs at least one {}", if pad { "button" } else { "key" })));
+            bld.err(item.err(format!("`{action}` needs at least one key")));
         }
         let mut bindings = Vec::new();
         for tok in &t[keys_from..] {
-            let parsed = if pad { parse_pad(&tok.text) } else { parse_binding(&tok.text) };
-            match parsed {
+            match parse_binding(&tok.text) {
                 Ok(bnd) => {
                     if let Some(other) = seen.insert(bnd.clone(), action.clone())
                         && other != action {
@@ -1694,19 +1695,7 @@ fn build_keys(bld: &mut Builder, b: &RawBlock, keymap: &mut Keymap) {
                 Err(e) => bld.err(item.err(e)),
             }
         }
-        if pad {
-            // Gamepad rows add to the action's keyboard bindings.
-            let mut existing: Vec<Binding> = keymap
-                .contexts()
-                .find(|(c, _)| *c == ctx)
-                .and_then(|(_, l)| l.iter().find(|(a, _)| *a == action).map(|(_, b)| b.clone()))
-                .unwrap_or_default();
-            existing.retain(|b| !matches!(b, Binding::Pad(_)));
-            existing.extend(bindings);
-            keymap.bind(ctx, &action, existing);
-        } else {
-            keymap.bind(ctx, &action, bindings);
-        }
+        keymap.bind(ctx, &action, bindings);
     }
 }
 
@@ -1787,7 +1776,9 @@ fn build_settings(bld: &mut Builder, b: &RawBlock) -> Settings {
         };
         match item.key() {
             "language" => s.language = Some(v),
-            "theme" | "style" => s.theme = Some(v),
+            "theme" | "style" => {
+                bld.err(item.err("there are no theme settings: a theme is a user override of `colors` and `panels` (spec §11)"))
+            }
             "refresh" => match v.parse::<f64>() {
                 Ok(f) if f > 0.0 => s.refresh_factor = Some(f),
                 _ => bld.err(item.err("`refresh` is a positive factor, e.g. 2 or 0.5")),

@@ -6,6 +6,7 @@ pub mod engine;
 pub mod error;
 pub mod frame;
 pub mod menu;
+pub mod ansi;
 pub mod names;
 pub mod protocol;
 pub mod host;
@@ -116,6 +117,23 @@ mod tests {
         let m = load(&fs, "app/app.termplate", &["cfg/overrides/vars.termplate", "cfg/settings.termplate"], &mut TestHost::new()).unwrap();
         assert_eq!(m.var("TARGET").unwrap().default, Value::Text("/srv".into()));
         assert_eq!(m.settings.language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn a_theme_is_a_user_override_of_the_style() {
+        use frame::Role;
+        use style::{Border, Color};
+        let fs = MemFs::new()
+            .with("app.termplate", "app T\n- termplate 0.1\n\ncolors\n- ACCENT 336699\n\npanels\n- MENU fg ACCENT\n\nmenu M\n- QUIT\n")
+            .with("cfg/overrides/theme.termplate", "colors\n- ACCENT ffcc00\n- new BG 101010\n\npanels\n- MENU fg ACCENT bg BG\n- new LOG border double\n")
+            .with("cfg/settings.termplate", "settings\n- theme dark\n");
+        let m = load(&fs, "app.termplate", &["cfg/overrides/theme.termplate"], &mut TestHost::new()).unwrap();
+        let menu = m.style.resolve(&["MENU".into()], Role::Normal);
+        assert_eq!(menu.fg, Some(Color::Rgb(0xff, 0xcc, 0x00)));
+        assert_eq!(menu.bg, Some(Color::Rgb(0x10, 0x10, 0x10)));
+        assert_eq!(m.style.border(&["LOG".into()]), Some(Border::Double));
+        let e = load(&fs, "app.termplate", &["cfg/settings.termplate"], &mut TestHost::new()).unwrap_err();
+        assert!(e.to_string().contains("there are no theme settings"), "{e}");
     }
 
     #[test]

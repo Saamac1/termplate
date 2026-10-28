@@ -42,6 +42,8 @@ pub enum Color {
     DarkMagenta,
     DarkCyan,
     DarkGrey,
+    /// The 256-color palette (ANSI colors kept in logs, spec §12).
+    Ansi(u8),
     Rgb(u8, u8, u8),
 }
 

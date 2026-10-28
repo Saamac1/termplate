@@ -571,6 +571,23 @@ fn ansi_codes_are_stripped_in_logs() {
 }
 
 #[test]
+fn ansi_colors_are_kept_and_drawn() {
+    use crate::style::{Color, Style};
+    let src = APP.replace("log LOG history 50", "log LOG history 50 ansi keep merge");
+    let (mut e, _) = app_with(model_of(&src));
+    e.log("LOG", "\x1b[31mred\x1b[0m text", false);
+    e.log("LOG", "\x1b[31mred\x1b[0m text", false);
+    e.log("LOG", "red text", false);
+    assert_eq!(e.log_lines("LOG"), ["red text", "red text"], "same text, other colors: not merged");
+    let f = e.render();
+    let y = (0..f.height).find(|&y| f.row(y).starts_with("red text (×2)")).unwrap();
+    let red = Some(Style { fg: Some(Color::DarkRed), ..Default::default() });
+    assert_eq!((0..3).map(|x| f.get(x, y).unwrap().style).collect::<Vec<_>>(), [red; 3]);
+    assert_eq!(f.get(3, y).unwrap().style, None);
+    assert_eq!(f.get(0, y + 1).unwrap().style, None, "the plain line");
+}
+
+#[test]
 fn texts_resolve_key_placeholders() {
     let (e, _) = app();
     assert_eq!(e.text("HELP", &BTreeMap::new()), "Paina Enter");
@@ -1338,6 +1355,16 @@ fn scripts_run_with_their_interpreter() {
     assert_eq!(req.shell.as_deref(), Some("bash"));
     assert!(req.env.contains(&("TARGET".into(), "/mnt".into())));
     assert!(e.has_jobs(), "a script runs in the background like `run`");
+}
+
+#[test]
+fn command_timeout_overrides_the_setting() {
+    let src = SCRIPTED.replace("- then MONITOR\n", "- then MONITOR\n- timeout 90s\n").replace("vars\n", "settings\n- timeout 5s\n\nvars\n");
+    let (mut e, mut h) = background_app(&src);
+    e.run_command(&mut h, "COPY", None);
+    e.run_command(&mut h, "FAILED", None);
+    assert_eq!(h.runs[0].timeout, Some(Duration::from_secs(90)));
+    assert_eq!(h.runs[1].timeout, Some(Duration::from_secs(5)));
 }
 
 #[test]

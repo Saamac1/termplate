@@ -303,6 +303,16 @@ fn missing_interpreter_is_a_load_error() {
 }
 
 #[test]
+fn command_timeout() {
+    let m = ok(&format!("{CMD}command C\n- run sleep 9\n- timeout 1m\n\ncommand D\n- run true\n"));
+    assert_eq!(m.commands["C"].timeout, Some(Duration::from_secs(60)));
+    assert_eq!(m.commands["D"].timeout, None);
+    assert!(err(&format!("{CMD}command C\n- run x\n- timeout soon\n")).contains("bad duration `soon`"));
+    assert!(err(&format!("{CMD}command C\n- run x interactive\n- timeout 5s\n")).contains("no timeout"));
+    assert!(err(&format!("{CMD}command C\n- run x\n- window\n- timeout 5s\n")).contains("`timeout`"));
+}
+
+#[test]
 fn window_commands() {
     let m = ok(&format!("{CMD}command A\n- run htop\n- window popup\n\ncommand B\n- run top\n- window\n- secret PASS env\n"));
     assert_eq!(m.commands["A"].window, Some(Window::Popup));
@@ -479,11 +489,9 @@ fn keys_with_open_toggle_modes_and_aliases() {
 }
 
 #[test]
-fn pad_blocks() {
-    let m = ok("menu M\n- QUIT\n\npad MENU deadzone 40%\n- confirm south\n- back east\n");
-    assert_eq!(m.keymap.lookup(&stack(&["MENU"]), &Binding::Pad("south".into())), Some("confirm"));
-    assert_eq!(m.keymap.lookup(&stack(&["MENU"]), &b("enter")), Some("confirm"), "keyboard keys kept");
-    assert!(err("pad MENU\n- confirm a_button\n").contains("unknown gamepad button"));
+fn pad_blocks_are_not_supported() {
+    let blocks = parse("t.termplate", "pad MENU\n- confirm south\n").unwrap_err();
+    assert!(blocks[0].message.contains("gamepad `pad` blocks are not supported"), "{blocks:?}");
 }
 
 #[test]

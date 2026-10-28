@@ -30,7 +30,7 @@ use crate::error::LoadError;
 use crate::token::{tokenize, Token};
 
 pub const BLOCK_KINDS: &[&str] = &[
-    "app", "vars", "layout", "panel", "command", "menu", "input", "keys", "pad", "text", "colors", "panels", "logs",
+    "app", "vars", "layout", "panel", "command", "menu", "input", "keys", "text", "colors", "panels", "logs",
     "log", "settings",
 ];
 
@@ -496,6 +496,8 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
                     "item outside a block".to_string()
                 } else if line.starts_with(char::is_whitespace) {
                     format!("unexpected text `{trimmed}`")
+                } else if word == "pad" {
+                    "gamepad `pad` blocks are not supported by Termplate (spec §9)".to_string()
                 } else {
                     format!("unknown block kind `{word}`")
                 };

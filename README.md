@@ -9,7 +9,7 @@ open questions and assumptions are in [`CLARIFICATIONS.md`](CLARIFICATIONS.md).
 | Crate | Role (spec §16) |
 |---|---|
 | `termplate-core` | Parsing, includes and patches, model and load-time validation, layout solving, panel field detection, texts, key contexts, menu state, the runtime engine and its drawing model, the coprocess line protocol. No I/O. |
-| `termplate-term` | Terminal drawing (diffing) and input with crossterm on `/dev/tty`, themes, `NO_COLOR`, terminal restore. |
+| `termplate-term` | Terminal drawing (diffing) and input with crossterm on `/dev/tty`, styles, `NO_COLOR`, terminal restore. |
 | `termplate-shell` | Shell host (§3 expressions, `sh -c` or `- shell` command runs with timeouts, `run:` scripts from private temporary files with a load-time `-n` check, `- window` commands in tmux or a new terminal window, background commands with streamed output and cancellation, path completion), JSON protocol, XDG overrides, the event loop and the `termplate` CLI. |
 
 ## Usage

@@ -6,7 +6,7 @@ Oct 27, 2026 · @Seppo Säämäki
 
 ## Speksin runko
 
-Luonnos 28.10.2026 (päivitetty CLARIFICATIONS.md:n vastausten mukaan; lisätty yhden tiedoston sovellus ja upotetut skriptit). Nimi Termplate. Pohjana RLML 0.3:n käyttöliittymädata (dataformaatit, luvut 9.3, 10 ja 11) ja moottorin vastuut (luvut 7.4, 7.5, 7.7 ja 8). Luvut ovat runkoja: jokaisessa on sisältö, RLML:stä perityt ratkaisut ja avoimet kohdat.
+Luonnos 28.10.2026 (päivitetty CLARIFICATIONS.md:n vastausten mukaan; lisätty yhden tiedoston sovellus ja upotetut skriptit; peliohjain ja teematiedostot poistettu, `ansi keep` ja komennon `- timeout` tarkennettu). Nimi Termplate. Pohjana RLML 0.3:n käyttöliittymädata (dataformaatit, luvut 9.3, 10 ja 11) ja moottorin vastuut (luvut 7.4, 7.5, 7.7 ja 8). Luvut ovat runkoja: jokaisessa on sisältö, RLML:stä perityt ratkaisut ja avoimet kohdat.
 
 ### 0. Tarkoitus ja rajaus
 
@@ -296,7 +296,7 @@ keys MAIN
 - Näppäin voi sitoa komennon suoraan (`- BACKUP b`).
 - **Kursoritoiminnot** nimetään kuten RLML:ssä: `cursor.north`, `cursor.south`, `cursor.west`, `cursor.east`. Lyhyet nimet `up`, `down`, `left`, `right` hyväksytään synonyymeinä, mutta `check` ja tekstien `{^…}` käyttävät RLML-nimiä.
 - Tekstien `{^confirm}`-paikkamerkki näyttää nykyisen sidonnan (luku 10).
-- Peliohjaimen `pad`-osio säilyy, koska sitä tarvitaan esimerkiksi Steam Deckillä. Ohjainta luetaan `gilrs`-kirjastolla (macOS ja Linux) valinnaisella käännösominaisuudella `gamepad`; asetus `settings - pad off` kytkee sen pois. Ilman ominaisuutta `pad`-sidonnat tarkistetaan mutta eivät saa tapahtumia.
+- **Ei peliohjainta:** RLML:n `pad`-osiota ei tueta. Termplate-tiedostossa `pad`-lohko on latausvirhe. Steam Deckin kaltaisilla laitteilla Steam Input voi muuttaa ohjaimen näppäimistö- ja hiirisyötteeksi.
 
 #### 9.1 Hiiri
 
@@ -324,7 +324,8 @@ Kuten RLML D 9.1 ja 9.3.
 - `colors`-lohko: paletti (`- STONE 5a5a6e`). Termplate hyväksyy lisäksi päätteen omat värit pienellä (`red`, `dark_grey`, `default`), jotka noudattavat käyttäjän päätteen teemaa.
 - `panels`-osio (reunat, värit, himmennys, valittu rivi). Roolien muunnelmat: `MENU.selected`, `MENU.disabled`, `LOG.stderr`, `.title` jne. Reunat: `single`, `double`, `rounded`, `heavy`, `ascii`, `none`.
 - **Reunat ovat vain tyylissä** (kuten RLML:ssä); piirroksissa ei ole reunoja. Modaalinen laatikko saa aina reunan (tyylistä tai `single`), asettelun alue vain `panels`-rivistä.
-- Teemat tiedostoina; `NO_COLOR` kunnioitetaan.
+- `NO_COLOR` kunnioitetaan.
+- **Ei teematiedostoja:** teema on käyttäjän ohitus (luku 13), joka paikkaa sovelluksen `colors`- ja `panels`-osioita. Olemassa oleva rivi korvautuu, uusi merkitään `new`, ja sovelluksen oma tyyli on aina pohja. Teemaa ei valita asetuksella. Sovelluksen kannattaa käyttää päätteen omia värejä, jolloin käyttäjän pääteteema riittää.
 
 ### 12. Loki ja tulosteet
 
@@ -338,6 +339,10 @@ log LOG history 500 more
 - `more` sivuttaa (`--More--`), `history N` säilyttää rivit vieritettäväksi.
 - stderr erotetaan tyylillä.
 - ANSI-värikoodit joko säilytetään tai poistetaan: `log NIMI ansi keep|strip`, oletus `strip`.
+  - `keep` piirtää SGR-koodien (`ESC[…m`) värit ja korostukset: perus- ja kirkkaat värit, 256 värin paletti, 24-bittiset värit sekä `bold`, `dim`, `italic`, `underline` ja `reverse` palautuksineen. Väri piirretään lokin tyylin (myös `LOG.stderr`) päälle, ja koodi on voimassa rivin loppuun.
+  - Muut ohjaussekvenssit (kursorin siirrot, OSC-otsikot) poistetaan aina.
+  - `NO_COLOR` poistaa myös säilytetyt värit, mutta korostukset jäävät.
+  - Tulostemodaali (komento ilman `output`-määrettä) poistaa koodit aina.
 
 ### 13. Käyttäjän ohitukset ja asetukset
 
@@ -350,7 +355,8 @@ Kuten RLML D 3.2.
 ```
 
 - Ohitukset ovat paikkoja: olemassa oleva rivi korvautuu, uusi merkitään `new`, kirjoitusvirhe on latausvirhe.
-- `settings`: kieli, teema, `refresh`-kerroin, komentojen aikakatkaisu.
+- `settings`: kieli, `refresh`-kerroin, komentojen aikakatkaisu, hiiri, alueiden numerot.
+- Teema on ohitustiedosto, esimerkiksi `overrides/theme.termplate`, jossa on `colors`- ja `panels`-osioita (luku 11).
 - `vars`-lohko on paikattavissa, joten käyttäjä voi muuttaa muuttujien oletusarvoja (esim. `TARGET`).
 
 ### 14. Ajomallit
@@ -422,7 +428,7 @@ done
   - Kentät ja rivit näyttävät edelliset arvonsa, kunnes uudet valmistuvat. Ensimmäistä tulostaan odottava valikko näyttää tekstin `TERMPLATE.LOADING` (oletus `…`).
   - Valikkoa tai paneelia, jonka laskenta on kesken, ei lasketa uudelleen; jos jokin muuttui sillä välin, se lasketaan kerran lisää, kun edellinen valmistuu.
   - Valikon tai paneelin avaaminen (`open`, widget-tila) laskee arvot heti, koska widget-tila tarvitsee tiedon siitä, onko lista tyhjä.
-  - Jokaisella komennolla on aikakatkaisu (`- timeout`, asetus `timeout`).
+  - Jokaisella komennolla on aikakatkaisu: komennon oma `- timeout AIKA` (esim. `30s`, `5m`), muuten asetus `timeout`. `interactive`- ja `window`-komennoilla aikakatkaisua ei ole, ja `- timeout` niissä on latausvirhe.
 - Työhakemisto on sovellustiedoston kansio, ellei `app`-lohko toisin määrää.
 - Pääte palautetaan ennalleen myös kaatuessa ja signaaleissa.
 - Vuorovaikutteiset komennot (`less`, `vim`) saavat päätteen: Termplate vapauttaa sen ajon ajaksi (`run … interactive`), kuten Midnight Commanderin Ctrl-O.
@@ -445,7 +451,7 @@ command MONITOR
 - **Ilman tmuxia:** macOS:ssä uusi Terminal-ikkuna (`osascript`), Linuxissa `$TERMINAL` tai `x-terminal-emulator`. `split` ja `popup` avaavat silloin tavallisen ikkunan.
 - **Ei ikkunaa saatavilla** (SSH ilman tmuxia, Linux-konsoli, ei graafista päätettä): komento ajetaan `interactive`-tilassa samassa päätteessä, ja lokiin tulee varoitus.
 - **Ympäristö:** uusi ikkuna saa tmux-palvelimen tai pääteohjelman ympäristön, ei Termplaten. Termplate kirjoittaa komennon ympäristön (luku 6) väliaikaiseen tiedostoon, jonka oikeudet ovat 600; ikkunassa ajettava kääre lukee ja poistaa sen ennen komentoa. Arvoja ei välitetä komentorivillä (esim. `tmux new-window -e`), koska ne näkyisivät `ps`-listauksessa. Työhakemisto välitetään (`-c`). Upotetun skriptin (luku 6.1) tiedosto välitetään samoin, ja kääre poistaa sen komennon jälkeen.
-- **Rajoitukset**, jotka lataus tarkistaa: `window` ei käy yhteen määreiden `interactive`, `output` ja `into` kanssa, eikä `- secret NIMI stdin` ole mahdollinen (`secret … env` kulkee ympäristötiedostossa).
+- **Rajoitukset**, jotka lataus tarkistaa: `window` ei käy yhteen määreiden `interactive`, `output`, `into` ja `timeout` kanssa, eikä `- secret NIMI stdin` ole mahdollinen (`secret … env` kulkee ympäristötiedostossa).
 - `then` ja `on_error` riippuvat vain siitä, avautuiko ikkuna. `timeout`, `back` ja `stop` eivät koske ikkunassa ajettavaa komentoa.
 - GNU screen (`screen -X screen`) sekä kittyn ja WezTermin etäohjaus voidaan lisätä myöhemmin samalla mallilla.
 
@@ -470,10 +476,9 @@ trait Host {
 
 ### 17. Avoimet kysymykset (koonti)
 
-1. Teematiedostot ja tyylin valinta (luku 11, RLML D 13).
-2. Säilytettyjen ANSI-värien piirto lokissa (`ansi keep`, luku 12).
+Ei avoimia kysymyksiä.
 
-Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1).
+Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13).
 
 ### Liite B. Esimerkit
 
@@ -492,7 +497,7 @@ Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-t
 | `menu`, `list` | D 11.2 | `filter`, `multi` |
 | `command` | RogueScriptin `command` | `run`, `run:`, `shell`, `env`, `output`, `window` |
 | `input` | `ask`, luku- ja tekstisyöte | `validate`, lajit |
-| `keys` | D 11.3 | hiirisidonnat, `pad` säilyy |
+| `keys` | D 11.3 | hiirisidonnat, ei `pad`-osiota |
 | kielitiedosto | D 10 | oletustekstit, upotus päätiedostoon |
 | `log` | D 11.4 | stdout/stderr |
 | `overrides/` | D 3.2 | XDG-polku |

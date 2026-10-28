@@ -40,6 +40,7 @@ pub fn to_crossterm(c: Color) -> CColor {
         Color::DarkMagenta => CColor::DarkMagenta,
         Color::DarkCyan => CColor::DarkCyan,
         Color::DarkGrey => CColor::DarkGrey,
+        Color::Ansi(n) => CColor::AnsiValue(n),
         Color::Rgb(r, g, b) => CColor::Rgb { r, g, b },
     }
 }
@@ -69,7 +70,10 @@ impl<W: Write> Screen<W> {
 
     fn style_of(&self, frame: &Frame, x: usize, y: usize) -> (char, Style) {
         let cell = frame.get(x, y).copied().unwrap_or_default();
-        let style = self.sheet.resolve(frame.area_of(&cell), cell.role);
+        let mut style = self.sheet.resolve(frame.area_of(&cell), cell.role);
+        if let Some(own) = cell.style {
+            style = style.over(own);
+        }
         (cell.ch, if self.no_color { style.without_colors() } else { style })
     }
 
@@ -80,7 +84,7 @@ impl<W: Write> Screen<W> {
             (Some(prev), false) => (0..frame.height)
                 .flat_map(|y| (0..frame.width).map(move |x| (x, y)))
                 .filter(|&(x, y)| match (frame.get(x, y), prev.get(x, y)) {
-                    (Some(a), Some(b)) => a.ch != b.ch || a.role != b.role || frame.area_of(a) != prev.area_of(b),
+                    (Some(a), Some(b)) => a.ch != b.ch || a.role != b.role || a.style != b.style || frame.area_of(a) != prev.area_of(b),
                     _ => true,
                 })
                 .collect(),
@@ -350,6 +354,24 @@ mod tests {
         let out = text(&s.out);
         assert!(!out.contains("\x1b[38;"), "no foreground colors: {out:?}");
         assert!(out.contains("\x1b[7m"));
+    }
+
+    #[test]
+    fn cell_styles_go_over_the_role_and_obey_no_color() {
+        use termplate_core::style::Attrs;
+        let red = Style { fg: Some(Color::Ansi(196)), attrs: Attrs { bold: true, ..Default::default() }, ..Default::default() };
+        let mut f = Frame::new(3, 1);
+        f.styled_text(0, 0, 3, "ab", Role::Normal, &[red, Style::default()]);
+        let mut s = Screen::new(Vec::new(), StyleSheet::default(), false);
+        s.draw(&f).unwrap();
+        let out = text(&s.out);
+        assert!(out.contains("\x1b[38;5;196m"), "{out:?}");
+        assert!(out.contains("\x1b[1m"), "{out:?}");
+        let mut s = Screen::new(Vec::new(), StyleSheet::default(), true);
+        s.draw(&f).unwrap();
+        let out = text(&s.out);
+        assert!(!out.contains("\x1b[38;"), "NO_COLOR drops kept colors: {out:?}");
+        assert!(out.contains("\x1b[1m"));
     }
 
     #[test]

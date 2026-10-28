@@ -3,7 +3,7 @@
 
 use crate::layout::Rect;
 use crate::model::Align;
-use crate::style::Border;
+use crate::style::{Border, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub enum Role {
@@ -64,11 +64,13 @@ pub struct Cell {
     pub role: Role,
     /// Index into [`Frame::areas`]: the area chain whose style applies.
     pub area: u16,
+    /// The cell's own style over the role's (ANSI colors in a log).
+    pub style: Option<Style>,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { ch: ' ', role: Role::Normal, area: 0 }
+        Cell { ch: ' ', role: Role::Normal, area: 0, style: None }
     }
 }
 
@@ -118,7 +120,7 @@ impl Frame {
             if x + 1 < self.width && self.cells[i + 1].ch == WIDE_CONT && ch != WIDE_CONT {
                 self.cells[i + 1].ch = ' ';
             }
-            self.cells[i] = Cell { ch, role, area: self.current };
+            self.cells[i] = Cell { ch, role, area: self.current, style: None };
         }
     }
 
@@ -154,6 +156,26 @@ impl Frame {
     }
 
     /// Writes `s` aligned within a one-line area of width `w`.
+    /// Like [`Frame::text`], with a style per character of `s` over `role`.
+    pub fn styled_text(&mut self, x: usize, y: usize, max: usize, s: &str, role: Role, styles: &[Style]) -> usize {
+        let mut n = 0;
+        for (ch, style) in s.chars().zip(styles.iter().chain(std::iter::repeat(&Style::default()))) {
+            let w = self.text(x + n, y, max - n, &ch.to_string(), role);
+            if w == 0 && char_width(ch) > 0 {
+                break;
+            }
+            if *style != Style::default() {
+                for c in x + n..x + n + w {
+                    if let Some(cell) = (y < self.height && c < self.width).then(|| &mut self.cells[y * self.width + c]) {
+                        cell.style = Some(*style);
+                    }
+                }
+            }
+            n += w;
+        }
+        n
+    }
+
     pub fn aligned(&mut self, x: usize, y: usize, w: usize, s: &str, align: Align, role: Role) {
         let s = fit(s, w, align);
         self.text(x, y, w, &s, role);

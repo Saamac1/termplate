@@ -306,7 +306,7 @@ pub enum MergeMode {
 /// names are qualified with the row's namespace.
 pub fn row_key(kind: &str, item: &RawItem) -> String {
     let t = &item.tokens;
-    if matches!(kind, "keys" | "pad") && t.len() >= 2 && (t[0].is("open") || t[0].is("toggle")) {
+    if kind == "keys" && t.len() >= 2 && (t[0].is("open") || t[0].is("toggle")) {
         return format!("{} {}", t[0].text, t[1].text);
     }
     let key = item.key();
@@ -349,7 +349,7 @@ pub fn merge(base: Vec<RawBlock>, blocks: Vec<RawBlock>, mode: MergeMode) -> Res
     let mut patches: Vec<RawBlock> = Vec::new();
 
     for mut b in blocks {
-        let unqualified = b.kind == "text" || SECTION_KINDS.contains(&b.kind.as_str()) || matches!(b.kind.as_str(), "keys" | "pad" | "app");
+        let unqualified = b.kind == "text" || SECTION_KINDS.contains(&b.kind.as_str()) || matches!(b.kind.as_str(), "keys" | "app");
         if !unqualified && b.modifier != Modifier::Patch {
             b.name = qualify(b.namespace.as_deref(), &b.name);
         }
@@ -453,7 +453,7 @@ pub fn merge(base: Vec<RawBlock>, blocks: Vec<RawBlock>, mode: MergeMode) -> Res
     // Patches, in load order, onto the winning definitions.
     for p in patches {
         let section = SECTION_KINDS.contains(&p.kind.as_str()) || p.kind == "text";
-        let target = if section || matches!(p.kind.as_str(), "keys" | "pad" | "app") {
+        let target = if section || matches!(p.kind.as_str(), "keys" | "app") {
             let key = (p.kind.clone(), p.name.clone());
             defs.contains_key(&key).then_some(key)
         } else {
