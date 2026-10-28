@@ -10,6 +10,8 @@
 //! - [override|new|drop] item words…
 //! legend:                      (continues over blank lines until a header)
 //! - legend item words…
+//! run:                         (command only: then a code block, fenced
+//!                               with backticks, holding the script; §6.1)
 //! ```
 //!
 //! * A block ends at a blank line (D 2.2). Free text outside blocks is a
@@ -19,6 +21,8 @@
 //!   Drawings have no comments.
 //! * A fenced code block is the drawing of the preceding drawing block;
 //!   inside it every line, also blank ones, is drawing.
+//! * `run:` in a command block takes the fenced code block after it as the
+//!   command's script; the fence is required and its content is verbatim.
 //! * `text LANG` blocks (Termplate) and header-less language files take
 //!   bare `KEY text` lines (D 10).
 
@@ -101,6 +105,25 @@ pub struct Param {
     pub ty: Option<String>,
 }
 
+/// A command's `run:` script (spec §6.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawScript {
+    /// The fence's language tag (`bash`), empty when none.
+    pub lang: String,
+    pub lines: Vec<String>,
+    pub file: String,
+    /// Line number of the first script line.
+    pub line: usize,
+}
+
+impl RawScript {
+    pub fn text(&self) -> String {
+        let mut t = self.lines.join("\n");
+        t.push('\n');
+        t
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawBlock {
     pub modifier: Modifier,
@@ -120,6 +143,7 @@ pub struct RawBlock {
     pub items: Vec<RawItem>,
     pub legend: Vec<RawItem>,
     pub has_legend: bool,
+    pub script: Option<RawScript>,
 }
 
 impl RawBlock {
@@ -174,6 +198,10 @@ enum State {
     Legend,
     /// Skipping a code block that is not a drawing.
     SkipFence,
+    /// After `run:`: the script's opening fence must come.
+    AwaitScript,
+    /// Inside a script; ends at a fence at least as long as the opening one.
+    Script(usize),
 }
 
 fn header_kind(line: &str) -> Option<(Modifier, &str)> {
@@ -248,6 +276,31 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
             State::SkipFence => {
                 if fence {
                     state = State::Outside;
+                }
+                continue;
+            }
+            State::Script(ticks) => {
+                let t = line.trim();
+                if t.len() >= ticks && t.chars().all(|c| c == '`') {
+                    state = State::Body;
+                } else {
+                    current.as_mut().unwrap().script.as_mut().unwrap().lines.push(line.to_string());
+                }
+                continue;
+            }
+            State::AwaitScript => {
+                if trimmed.is_empty() || is_comment(trimmed) {
+                    continue;
+                }
+                if fence {
+                    let t = line.trim_start();
+                    let ticks = t.chars().take_while(|c| *c == '`').count();
+                    let lang = t[ticks..].trim().to_string();
+                    current.as_mut().unwrap().script = Some(RawScript { lang, lines: vec![], file: file.to_string(), line: lineno + 1 });
+                    state = State::Script(ticks);
+                } else {
+                    errors.push(LoadError::new(file, lineno, "`run:` must be followed by a ``` code block holding the script"));
+                    state = State::Closed;
                 }
                 continue;
             }
@@ -386,6 +439,18 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
             }
         }
 
+        if code_trimmed == "run:" {
+            match current.as_ref() {
+                Some(b) if b.kind != "command" => {
+                    errors.push(LoadError::new(file, lineno, format!("`run:` belongs to a command block, not `{}`", b.kind)))
+                }
+                Some(b) if b.script.is_some() => errors.push(LoadError::new(file, lineno, "duplicate `run:`")),
+                Some(_) if state != State::Outside => state = State::AwaitScript,
+                _ => errors.push(LoadError::new(file, lineno, "`run:` outside a block")),
+            }
+            continue;
+        }
+
         if code_trimmed == "legend:" {
             match (current.as_mut(), state) {
                 (Some(b), _) if !b.has_legend => {
@@ -438,8 +503,11 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
             }
         }
     }
-    if state == State::FencedDrawing || state == State::SkipFence {
+    if matches!(state, State::FencedDrawing | State::SkipFence | State::Script(_)) {
         errors.push(LoadError::new(file, src.lines().count(), "unterminated code block"));
+    }
+    if state == State::AwaitScript {
+        errors.push(LoadError::new(file, src.lines().count(), "`run:` must be followed by a ``` code block holding the script"));
     }
     flush(&mut current, &mut out);
     if errors.is_empty() { Ok(out) } else { Err(errors) }
@@ -584,6 +652,7 @@ fn parse_header(
         items: Vec::new(),
         legend: Vec::new(),
         has_legend: false,
+        script: None,
     })
 }
 
@@ -778,6 +847,31 @@ mod tests {
     fn top_level_split() {
         assert_eq!(split_top_level("a, $(cut -d, -f1), \"x,y\"", ','), ["a", " $(cut -d, -f1)", " \"x,y\""]);
         assert_eq!(split_top_level("", ','), [""]);
+    }
+
+    #[test]
+    fn run_script_sub_block() {
+        let src = "command BACKUP\n- shell bash\nrun:\n```bash\n# comment\n\n  echo \"$X\" > out\n- not an item\n```\n- then quit\n";
+        let b = &blocks(src)[0];
+        let s = b.script.as_ref().unwrap();
+        assert_eq!(s.lang, "bash");
+        assert_eq!(s.line, 5);
+        assert_eq!(s.lines, ["# comment", "", "  echo \"$X\" > out", "- not an item"]);
+        assert_eq!(s.text(), "# comment\n\n  echo \"$X\" > out\n- not an item\n");
+        assert_eq!(b.items.len(), 2, "items continue after the script");
+        // after a blank line, with a longer fence and no language
+        let b = &blocks("command C\n- output LOG\n\nrun:\n\n````\n```\n````\n")[0];
+        assert_eq!(b.script.as_ref().unwrap().lines, ["```"]);
+        assert_eq!(b.script.as_ref().unwrap().lang, "");
+    }
+
+    #[test]
+    fn run_script_errors() {
+        assert!(errs("command C\nrun:\necho hi\n")[0].message.contains("must be followed"));
+        assert!(errs("command C\nrun:\n")[0].message.contains("must be followed"));
+        assert!(errs("menu M\nrun:\n```\nx\n```\n")[0].message.contains("belongs to a command"));
+        assert!(errs("command C\nrun:\n```\nx\n")[0].message.contains("unterminated"));
+        assert!(errs("command C\nrun:\n```\nx\n```\nrun:\n```\ny\n```\n")[0].message.contains("duplicate"));
     }
 
     #[test]

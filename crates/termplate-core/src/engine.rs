@@ -1920,6 +1920,7 @@ impl Engine {
                     interactive: *interactive,
                     timeout: if *interactive { None } else { self.model.settings.timeout },
                     workdir: self.model.app.workdir.clone(),
+                    ..Default::default()
                 };
                 if !*interactive && let Some(id) = host.spawn(&req) {
                     let origin = self.origin();
@@ -1982,7 +1983,8 @@ impl Engine {
             self.report(&format!("command chain too deep at `{name}`"));
             return;
         }
-        if def.run.is_some() && !def.interactive && self.already_running(name) {
+        let background = def.run.is_some() && !def.interactive && def.window.is_none();
+        if background && self.already_running(name) {
             return;
         }
         self.chain_depth += 1;
@@ -2003,13 +2005,27 @@ impl Engine {
                 }
                 let req = RunRequest {
                     cmdline: cmdline.clone(),
+                    shell: def.shell.clone(),
+                    script: def.script,
+                    window: def.window,
                     env: self.command_env(&extra, it.as_deref()),
                     stdin,
                     interactive: def.interactive,
-                    timeout: if def.interactive { None } else { self.model.settings.timeout },
+                    timeout: if background { self.model.settings.timeout } else { None },
                     workdir: self.model.app.workdir.clone(),
                 };
-                let spawned = if def.interactive { None } else { host.spawn(&req) };
+                if def.window.is_some() {
+                    // Started and forgotten (spec §15.1): `then` and
+                    // `on_error` only tell whether the window opened.
+                    let out = host.run(&req);
+                    if !out.stderr.is_empty() {
+                        self.report(out.stderr.trim_end());
+                    }
+                    self.continue_chain(host, &def, out.ok(), it);
+                    self.chain_depth -= 1;
+                    return;
+                }
+                let spawned = if background { host.spawn(&req) } else { None };
                 match spawned {
                     Some(id) => {
                         let origin = self.origin();

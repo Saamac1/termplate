@@ -9,7 +9,9 @@
 //! * A later definition with the same full name replaces an earlier one; a
 //!   replacement from another file warns unless marked `override`.
 //!   Unnamed sections merge row by row. `patch` blocks apply after
-//!   everything is loaded. User override files patch everything.
+//!   everything is loaded. User override files patch everything. A
+//!   patch's `run:` script replaces the command's script, or its `- run`
+//!   row, as a whole (spec §6.1).
 //!
 //! The core does no I/O; file access goes through [`SourceFs`].
 
@@ -223,6 +225,7 @@ impl Loader<'_> {
                     items,
                     legend: vec![],
                     has_legend: false,
+                    script: None,
                 }),
                 Err(es) => self.errors.0.extend(es),
             }
@@ -516,7 +519,16 @@ fn apply_patch(target: &mut RawBlock, patch: RawBlock, lenient: bool, errors: &m
         target.args_text = patch.args_text;
     }
     let kind = target.kind.clone();
-    for (rows, patch_rows) in [(&mut target.items, patch.items), (&mut target.legend, patch.legend)] {
+    // `run:` and `- run` are one field: either replaces the other.
+    let mut items = patch.items;
+    if patch.script.is_some() {
+        target.items.retain(|t| t.key() != "run");
+        target.script = patch.script;
+    } else if target.script.is_some() && let Some(i) = items.iter().position(|t| t.key() == "run") {
+        target.script = None;
+        target.items.push(items.remove(i));
+    }
+    for (rows, patch_rows) in [(&mut target.items, items), (&mut target.legend, patch.legend)] {
         for item in patch_rows {
             let prefix = row_prefix(&item);
             let row = if prefix.is_some() { item.shift(1) } else { item.clone() };
@@ -553,6 +565,26 @@ mod tests {
 
     fn tree(fs: &MemFs, root: &str) -> Vec<RawBlock> {
         load_tree(fs, root).unwrap_or_else(|e| panic!("{e}")).0
+    }
+
+    #[test]
+    fn patch_replaces_run_script() {
+        let base = "command C\n- output LOG\nrun:\n```\necho old\n```\n";
+        let fs = MemFs::new().with("a.termplate", base);
+        let (blocks, _) = load_tree(&fs, "a.termplate").unwrap();
+        let patch = |src: &str| {
+            let fs = MemFs::new().with("u.termplate", src);
+            let (user, _) = load_tree(&fs, "u.termplate").unwrap();
+            merge(blocks.clone(), user, MergeMode::UserOverride).unwrap().0.remove(0)
+        };
+        let b = patch("command C\nrun:\n```bash\necho new\n```\n");
+        assert_eq!(b.script.as_ref().unwrap().lines, ["echo new"]);
+        assert_eq!(b.script.as_ref().unwrap().file, "u.termplate");
+        let b = patch("command C\n- run htop\n");
+        assert!(b.script.is_none());
+        assert_eq!(b.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["output LOG", "run htop"]);
+        let b = patch("command C\n- output OTHER\n");
+        assert!(b.script.is_some(), "a patch without `run:` keeps the script");
     }
 
     #[test]

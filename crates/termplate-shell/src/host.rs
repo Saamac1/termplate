@@ -72,6 +72,7 @@ impl<R: CommandRunner> ShellHost<R> {
             interactive: false,
             timeout: Some(self.subst_timeout),
             workdir: self.workdir.clone(),
+            ..Default::default()
         };
         self.runner.run(&req)
     }
@@ -216,6 +217,45 @@ impl<R: CommandRunner> Host for ShellHost<R> {
     fn complete_path(&mut self, prefix: &str) -> Vec<String> {
         crate::fs::complete_path(prefix, self.workdir.as_deref(), std::env::var("HOME").ok().as_deref())
     }
+
+    /// The interpreter must exist; `sh`, `bash` and `zsh` scripts are
+    /// checked with `-n`, and the error's line number is the script's.
+    fn check_script(&mut self, shell: &str, script: Option<&str>) -> Result<(), (Option<usize>, String)> {
+        if crate::fs::find_program(shell, std::env::var("PATH").ok().as_deref()).is_none() {
+            return Err((None, format!("interpreter `{shell}` not found")));
+        }
+        let Some(script) = script else { return Ok(()) };
+        if !matches!(shell.rsplit('/').next(), Some("sh" | "bash" | "zsh")) {
+            return Ok(());
+        }
+        let file = crate::exec::temp_file(script).map_err(|e| (None, format!("cannot write the script file: {e}")))?;
+        let path = file.path().to_string_lossy().into_owned();
+        let out = std::process::Command::new(shell)
+            .arg("-n")
+            .arg(&path)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| (None, format!("cannot run `{shell} -n`: {e}")))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        Err(syntax_error(&String::from_utf8_lossy(&out.stderr), &path))
+    }
+}
+
+/// The first line of a `-n` check's error without the file name, and the
+/// line number in it: `F: line 5: …` (bash, sh), `F:5: …` (zsh).
+fn syntax_error(stderr: &str, path: &str) -> (Option<usize>, String) {
+    let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("syntax error");
+    let rest = first.strip_prefix(path).unwrap_or(first).trim_start_matches([':', ' ']);
+    let digits: String = rest.chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+    let line = digits.parse().ok();
+    // drop the `line 5:` / `5:` part, keep the message
+    let msg = match rest.find(&digits).filter(|_| line.is_some()) {
+        Some(i) => rest[i + digits.len()..].trim_start_matches([':', ' ']),
+        None => rest,
+    };
+    (line, msg.to_string())
 }
 
 #[cfg(test)]
@@ -249,6 +289,25 @@ mod tests {
 
     fn e(s: &str) -> Expr {
         Expr::bare(s)
+    }
+
+    #[test]
+    fn syntax_errors_name_the_script_line() {
+        let p = "/tmp/termplate-1.sh";
+        assert_eq!(syntax_error(&format!("{p}: line 5: syntax error near `fi'\n{p}: line 5: `fi fi'\n"), p), (Some(5), "syntax error near `fi'".into()));
+        assert_eq!(syntax_error(&format!("{p}:2: unmatched \"\n"), p), (Some(2), "unmatched \"".into()));
+        assert_eq!(syntax_error(&format!("{p}: rivi 1: odottamaton EOF\n"), p), (Some(1), "odottamaton EOF".into()));
+        assert_eq!(syntax_error("weird\n", p), (None, "weird".into()));
+    }
+
+    #[test]
+    fn script_check_runs_the_interpreter() {
+        let mut h = ShellHost::new(ProcessRunner::default());
+        assert!(h.check_script("sh", Some("echo ok\n")).is_ok());
+        let (line, msg) = h.check_script("sh", Some("echo a\n\nif true; then\n  echo b\nfi fi\n")).unwrap_err();
+        assert_eq!(line, Some(5), "{msg}");
+        assert!(h.check_script("no-such-interpreter-xyz", None).unwrap_err().1.contains("not found"));
+        assert!(h.check_script("/bin/sh", None).is_ok());
     }
 
     #[test]

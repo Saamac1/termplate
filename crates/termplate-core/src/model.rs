@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::error::{LoadError, LoadErrors};
-use crate::host::{Expr, ExprKind, Host};
+use crate::host::{Expr, ExprKind, Host, Window};
 use crate::keys::{action_alias, parse_binding, parse_pad, Binding, Keymap, Mode, BUILTIN_CONTEXTS, KEY_ACTIONS};
 use crate::layout::{analyze, AreaSize, Dim, Dims, Grid, Rect, SizeCond};
 use crate::names::{self, is_name, is_name_with_variant};
@@ -185,7 +185,12 @@ pub enum SecretMode {
 pub struct CommandDef {
     pub name: String,
     pub confirm: Option<String>,
+    /// The command line, or the `run:` script when `script` is set.
     pub run: Option<String>,
+    pub script: bool,
+    /// `- shell`, or the script's language tag; `None` is `sh` (spec §6).
+    pub shell: Option<String>,
+    pub window: Option<Window>,
     pub interactive: bool,
     pub env: Vec<(String, Expr)>,
     pub output: Option<String>,
@@ -353,6 +358,9 @@ struct Builder<'h> {
     texts: Texts,
     text_locs: BTreeMap<(String, String), (String, usize)>,
     implicit_inputs: Vec<InputDef>,
+    /// Widget files: a menu item without an action or a command of its
+    /// name is a plain choice (spec §14.1).
+    choices: bool,
 }
 
 impl Builder<'_> {
@@ -407,6 +415,16 @@ impl Builder<'_> {
 
 impl Model {
     pub fn build(blocks: Vec<RawBlock>, host: &mut dyn Host) -> Result<Model, LoadErrors> {
+        Model::build_with(blocks, host, false)
+    }
+
+    /// Like [`Model::build`] for a widget file: menu items need no action.
+    /// Such an item counts as a command, so widget mode prints its key.
+    pub fn build_widget(blocks: Vec<RawBlock>, host: &mut dyn Host) -> Result<Model, LoadErrors> {
+        Model::build_with(blocks, host, true)
+    }
+
+    fn build_with(blocks: Vec<RawBlock>, host: &mut dyn Host, choices: bool) -> Result<Model, LoadErrors> {
         let mut bld = Builder {
             host,
             errors: LoadErrors::default(),
@@ -418,6 +436,7 @@ impl Model {
             texts: Texts::default(),
             text_locs: BTreeMap::new(),
             implicit_inputs: vec![],
+            choices,
         };
         for b in &blocks {
             let Some(kind) = DEF_KINDS.iter().find(|k| **k == b.kind) else { continue };
@@ -1173,6 +1192,9 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         name: b.name.clone(),
         confirm: None,
         run: None,
+        script: false,
+        shell: None,
+        window: None,
         interactive: false,
         env: vec![],
         output: None,
@@ -1195,6 +1217,12 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
         };
         match item.key() {
             "confirm" => c.confirm = one(bld).map(|k| bld.text_key(item, &k)),
+            "shell" => c.shell = one(bld),
+            "window" => match item.tokens.get(1..) {
+                Some([]) => c.window = Some(Window::Tab),
+                Some([w]) if Window::parse(&w.text).is_some() => c.window = Window::parse(&w.text),
+                _ => bld.err(item.err("`window [tab|split|popup]`")),
+            },
             "run" => {
                 if let Some(Action::Run { cmdline, interactive }) = parse_action(bld, item, 0, item.tokens.len()) {
                     c.run = Some(cmdline);
@@ -1246,8 +1274,49 @@ fn build_command(bld: &mut Builder, b: &RawBlock) -> CommandDef {
             other => bld.err(item.err(format!("unknown field `{other}` in command block"))),
         }
     }
+    if let Some(script) = &b.script {
+        let at = |line: usize, msg: String| LoadError::new(&script.file, line, msg);
+        if c.run.is_some() {
+            bld.err(at(script.line - 1, "a command has either `- run` or `run:`, not both".into()));
+        }
+        let lang = script.lang.as_str();
+        match &c.shell {
+            Some(sh) if !lang.is_empty() && !sh.rsplit('/').next().unwrap_or(sh).starts_with(lang) => {
+                bld.err(at(script.line - 1, format!("`- shell {sh}` contradicts the script's language `{lang}`")))
+            }
+            Some(_) => {}
+            None if matches!(lang, "" | "sh" | "bash" | "zsh") => c.shell = (!lang.is_empty()).then(|| lang.to_string()),
+            None => bld.err(at(script.line - 1, format!("unknown script language `{lang}`: name the interpreter with `- shell`"))),
+        }
+        let text = script.text();
+        if let Err((line, msg)) = bld.host.check_script(c.shell.as_deref().unwrap_or("sh"), Some(&text)) {
+            let line = line.map_or(script.line - 1, |l| script.line + l - 1);
+            bld.err(at(line, format!("command `{}`: {msg}", c.name)));
+        }
+        c.run = Some(text);
+        c.script = true;
+    } else if let Some(sh) = &c.shell {
+        if c.run.is_none() {
+            bld.err(b.err("`shell` needs `- run` or `run:`"));
+        } else if let Err((_, msg)) = bld.host.check_script(sh, None) {
+            bld.err(b.err(format!("command `{}`: {msg}", c.name)));
+        }
+    }
     if c.run.is_none() && c.then.is_none() {
-        bld.err(b.err(format!("command `{}` needs `run` or `then`", c.name)));
+        bld.err(b.err(format!("command `{}` needs `run`, `run:` or `then`", c.name)));
+    }
+    if c.window.is_some() {
+        if c.run.is_none() {
+            bld.err(b.err("`window` needs `- run` or `run:`"));
+        }
+        for (bad, what) in [(c.interactive, "interactive"), (c.output.is_some(), "output"), (c.into.is_some(), "into")] {
+            if bad {
+                bld.err(b.err(format!("`window` cannot be combined with `{what}` (spec §15.1)")));
+            }
+        }
+        if c.secrets.iter().any(|(_, m)| *m == SecretMode::Stdin) {
+            bld.err(b.err("`window` cannot take a secret on stdin; use `- secret NAME env`"));
+        }
     }
     if c.secrets.iter().filter(|(_, m)| *m == SecretMode::Stdin).count() > 1 {
         bld.err(b.err("only one secret can be passed on stdin"));
@@ -1351,6 +1420,7 @@ fn build_static_menu(bld: &mut Builder, b: &RawBlock) -> MenuKind {
                 Some(full) => Some(Action::Command(full)),
                 None => match Action::builtin(&key.to_ascii_lowercase()) {
                     Some(a) => Some(a),
+                    None if bld.choices => Some(Action::Command(key.clone())),
                     None => {
                         bld.err(item.err(format!(
                             "`{key}` has no action and there is no command `{key}` or action `{}`",

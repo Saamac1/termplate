@@ -21,7 +21,7 @@ pub mod token;
 pub mod value;
 
 pub use error::{LoadError, LoadErrors};
-pub use host::{eval_now, EvalRequest, EvalResults, Evaluated, Expr, ExprKind, Host, JobEvent, JobId, OwnedScope, Outcome, RunRequest, Scope};
+pub use host::{eval_now, EvalRequest, EvalResults, Evaluated, Expr, ExprKind, Host, JobEvent, JobId, OwnedScope, Outcome, RunRequest, Scope, Window};
 pub use model::Model;
 pub use value::Value;
 
@@ -37,27 +37,30 @@ pub fn load(
     host: &mut dyn Host,
 ) -> Result<Model, LoadErrors> {
     let (blocks, warnings) = load_tree(fs, root)?;
-    build(blocks, warnings, overrides, fs, host)
+    build(blocks, warnings, overrides, fs, host, false)
 }
 
-/// Like [`load`], but a root without an `app` block gets one named after
-/// the file (spec §2: widget files). The missing version is a warning.
+/// Like [`load`], but a root without an `app` block gets one named `name`
+/// or after the file (spec §2: widget files). The missing version is a
+/// warning. In such a file menu items need no action (spec §14.1).
 pub fn load_widget(
     fs: &dyn SourceFs,
     root: &str,
+    name: Option<&str>,
     overrides: &[&str],
     host: &mut dyn Host,
 ) -> Result<Model, LoadErrors> {
     let (mut blocks, mut warnings) = load_tree(fs, root)?;
-    if !blocks.iter().any(|b| b.kind == "app") {
-        let name = implicit_app_name(root);
+    let bare = !blocks.iter().any(|b| b.kind == "app");
+    if bare {
+        let name = name.map(str::to_string).unwrap_or_else(|| implicit_app_name(root));
         let version = model::SUPPORTED_VERSIONS.last().copied().unwrap_or("0.1");
         let parsed = syntax::parse(root, &format!("app {name}\n- termplate {version}\n"))
             .map_err(LoadErrors)?;
         blocks.splice(0..0, parsed.blocks().cloned());
         warnings.push(LoadError::new(root, 0, format!("no `app` block: using `app {name}` with `- termplate {version}`")));
     }
-    build(blocks, warnings, overrides, fs, host)
+    build(blocks, warnings, overrides, fs, host, bare)
 }
 
 /// The app name of a widget file without an `app` block: the file name in
@@ -80,6 +83,7 @@ fn build(
     overrides: &[&str],
     fs: &dyn SourceFs,
     host: &mut dyn Host,
+    widget: bool,
 ) -> Result<Model, LoadErrors> {
     let (mut blocks, w) = merge(vec![], blocks, MergeMode::Base)?;
     warnings.extend(w);
@@ -90,7 +94,7 @@ fn build(
         blocks = merged;
         warnings.extend(w);
     }
-    let mut model = Model::build(blocks, host)?;
+    let mut model = if widget { Model::build_widget(blocks, host)? } else { Model::build(blocks, host)? };
     warnings.append(&mut model.warnings);
     model.warnings = warnings;
     Ok(model)
@@ -118,7 +122,7 @@ mod tests {
     fn widget_file_without_app() {
         let fs = MemFs::new().with("dir/my-ui.termplate", "menu M\n- QUIT\n");
         assert!(load(&fs, "dir/my-ui.termplate", &[], &mut TestHost::new()).is_err(), "`run` needs `app`");
-        let m = load_widget(&fs, "dir/my-ui.termplate", &[], &mut TestHost::new()).unwrap();
+        let m = load_widget(&fs, "dir/my-ui.termplate", None, &[], &mut TestHost::new()).unwrap();
         assert_eq!(m.app.name, "MY_UI");
         assert_eq!(m.app.version, "0.1");
         assert!(m.warnings.iter().any(|w| w.to_string().contains("no `app` block")));
@@ -128,7 +132,7 @@ mod tests {
     #[test]
     fn widget_file_with_app_keeps_it() {
         let fs = MemFs::new().with("ui.termplate", "app T\n- termplate 0.1\n\nmenu M\n- QUIT\n");
-        let m = load_widget(&fs, "ui.termplate", &[], &mut TestHost::new()).unwrap();
+        let m = load_widget(&fs, "ui.termplate", None, &[], &mut TestHost::new()).unwrap();
         assert_eq!(m.app.name, "T");
         assert!(m.warnings.is_empty());
     }

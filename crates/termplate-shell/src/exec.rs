@@ -1,12 +1,15 @@
-//! Running commands (spec §15): `sh -c` with values in the environment, a
+//! Running commands (spec §15): `sh -c` (or the `- shell` interpreter) with
+//! values in the environment, `run:` scripts from a temporary file, a
 //! timeout that sends SIGTERM and then SIGKILL to the whole process group,
-//! background commands that stream their output, and terminal hand-over
-//! for interactive commands.
+//! background commands that stream their output, terminal hand-over for
+//! interactive commands, and `- window` commands (see [`crate::window`]).
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
@@ -52,6 +55,19 @@ pub struct ProcessRunner {
 
 impl CommandRunner for ProcessRunner {
     fn run(&mut self, req: &RunRequest) -> Outcome {
+        if let Some(kind) = req.window {
+            let handover = self.handover.clone();
+            return crate::window::open(req, kind, &|r: &RunRequest| {
+                if let Some(h) = &handover {
+                    h(true);
+                }
+                let out = run_interactive(r);
+                if let Some(h) = &handover {
+                    h(false);
+                }
+                out
+            });
+        }
         if req.interactive {
             if let Some(h) = &self.handover {
                 h(true);
@@ -80,24 +96,94 @@ impl CommandRunner for ProcessRunner {
     }
 }
 
-fn command(req: &RunRequest) -> Command {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(&req.cmdline);
+/// A file or folder removed when dropped.
+#[derive(Debug)]
+pub struct TempPath(PathBuf);
+
+impl TempPath {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+    /// Leaves the file in place; someone else removes it.
+    pub fn keep(self) -> PathBuf {
+        let p = self.0.clone();
+        std::mem::forget(self);
+        p
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        if self.0.is_dir() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        } else {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}
+
+fn temp_name(suffix: &str) -> PathBuf {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    std::env::temp_dir().join(format!("termplate-{}-{}-{nanos}{suffix}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)))
+}
+
+/// A new file only we can read (mode 600) holding `content`.
+pub fn temp_file(content: &str) -> std::io::Result<TempPath> {
+    let path = temp_name(".sh");
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    let t = TempPath(path);
+    f.write_all(content.as_bytes())?;
+    Ok(t)
+}
+
+/// A new folder only we can enter (mode 700).
+pub fn temp_dir() -> std::io::Result<TempPath> {
+    let path = temp_name("");
+    std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+    Ok(TempPath(path))
+}
+
+pub fn shell_of(req: &RunRequest) -> &str {
+    req.shell.as_deref().unwrap_or("sh")
+}
+
+/// The process for `req`: `SHELL -c LINE`, or `SHELL FILE` for a script,
+/// whose temporary file lives as long as the returned guard.
+fn command(req: &RunRequest) -> Result<(Command, Option<TempPath>), Outcome> {
+    let mut cmd = Command::new(shell_of(req));
+    let script = if req.script {
+        let f = temp_file(&req.cmdline).map_err(|e| failure(format!("cannot write the script file: {e}")))?;
+        cmd.arg(f.path());
+        Some(f)
+    } else {
+        cmd.arg("-c").arg(&req.cmdline);
+        None
+    };
     for (k, v) in &req.env {
         cmd.env(k, v);
     }
     if let Some(dir) = &req.workdir {
         cmd.current_dir(dir);
     }
-    cmd
+    Ok((cmd, script))
+}
+
+/// What a failed start reports: the command line, or the interpreter of a
+/// script.
+fn describe(req: &RunRequest) -> String {
+    if req.script { format!("{} script", shell_of(req)) } else { req.cmdline.clone() }
 }
 
 fn failure(msg: String) -> Outcome {
     Outcome { status: 127, stdout: String::new(), stderr: msg, timed_out: false }
 }
 
-fn run_interactive(req: &RunRequest) -> Outcome {
-    let mut cmd = command(req);
+pub fn run_interactive(req: &RunRequest) -> Outcome {
+    let (mut cmd, _script) = match command(req) {
+        Ok(c) => c,
+        Err(out) => return out,
+    };
     // The command reads and writes the terminal directly.
     if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")
         && let (Ok(a), Ok(b), Ok(c)) = (tty.try_clone(), tty.try_clone(), tty.try_clone()) {
@@ -105,7 +191,7 @@ fn run_interactive(req: &RunRequest) -> Outcome {
         }
     match cmd.status() {
         Ok(s) => Outcome { status: exit_code(s), ..Default::default() },
-        Err(e) => failure(format!("cannot run `{}`: {e}", req.cmdline)),
+        Err(e) => failure(format!("cannot run `{}`: {e}", describe(req))),
     }
 }
 
@@ -114,14 +200,15 @@ fn exit_code(s: std::process::ExitStatus) -> i32 {
     s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0))
 }
 
-/// Starts `req` in its own process group with piped output.
-fn spawn_child(req: &RunRequest) -> Result<Child, Outcome> {
-    let mut cmd = command(req);
+/// Starts `req` in its own process group with piped output. The guard
+/// holds a script's temporary file until the command ends.
+fn spawn_child(req: &RunRequest) -> Result<(Child, Option<TempPath>), Outcome> {
+    let (mut cmd, script) = command(req)?;
     cmd.stdin(if req.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    let mut child = cmd.spawn().map_err(|e| failure(format!("cannot run `{}`: {e}", req.cmdline)))?;
+    let mut child = cmd.spawn().map_err(|e| failure(format!("cannot run `{}`: {e}", describe(req))))?;
     if let (Some(mut sin), Some(data)) = (child.stdin.take(), req.stdin.clone()) {
         // Write from a thread so a command that does not read stdin cannot
         // block us; the pipe closes when the thread ends.
@@ -129,7 +216,7 @@ fn spawn_child(req: &RunRequest) -> Result<Child, Outcome> {
             let _ = sin.write_all(data.as_bytes());
         });
     }
-    Ok(child)
+    Ok((child, script))
 }
 
 /// Waits for `child`. The timeout or `cancel` sends SIGTERM to its group,
@@ -167,7 +254,7 @@ fn wait_child(child: &mut Child, req: &RunRequest, grace: Duration, cancel: Opti
 }
 
 pub fn run_captured(req: &RunRequest, grace: Duration) -> Outcome {
-    let mut child = match spawn_child(req) {
+    let (mut child, _script) = match spawn_child(req) {
         Ok(c) => c,
         Err(out) => return out,
     };
@@ -189,7 +276,7 @@ pub fn run_captured(req: &RunRequest, grace: Duration) -> Outcome {
 /// Runs `req`, sending each output line to `events` as it arrives. The
 /// returned outcome has no output; it all went out as lines.
 pub fn run_streaming(req: &RunRequest, grace: Duration, id: JobId, events: &Sender<JobEvent>, cancel: &AtomicBool) -> Outcome {
-    let mut child = match spawn_child(req) {
+    let (mut child, _script) = match spawn_child(req) {
         Ok(c) => c,
         Err(out) => {
             for l in out.stderr.lines() {
@@ -302,6 +389,29 @@ mod tests {
         let out = run_captured(&req("definitely-not-a-command-xyz"), KILL_GRACE);
         assert_eq!(out.status, 127);
         assert!(out.stderr.contains("not found"));
+    }
+
+    #[test]
+    fn shell_selects_the_interpreter() {
+        let mut r = req("echo ${BASH_VERSION:+bash}");
+        r.shell = Some("bash".into());
+        assert_eq!(run_captured(&r, KILL_GRACE).stdout, "bash\n");
+    }
+
+    #[test]
+    fn scripts_run_from_a_private_file_that_is_removed() {
+        let mut r = req("# a comment\nprintf '%s %s\\n' \"$X\" \"$0\"\nls -l \"$0\" | cut -c1-10\nread -r line; echo \"$line\"\n");
+        r.script = true;
+        r.env.push(("X".into(), "x".into()));
+        r.stdin = Some("from stdin\n".into());
+        let out = run_captured(&r, KILL_GRACE);
+        let lines: Vec<&str> = out.stdout.lines().collect();
+        assert_eq!(lines.len(), 3, "{out:?}");
+        let (x, path) = lines[0].split_once(' ').unwrap();
+        assert_eq!(x, "x");
+        assert_eq!(lines[1], "-rw-------");
+        assert_eq!(lines[2], "from stdin", "stdin stays free for the command");
+        assert!(!Path::new(path).exists(), "the script file is removed");
     }
 
     #[test]

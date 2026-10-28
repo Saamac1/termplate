@@ -96,3 +96,58 @@ fn user_settings_file_is_loaded() {
     assert_eq!(code, 3);
     assert!(err.contains("unknown setting `volume`"), "{err}");
 }
+
+fn with_stdin(cmd: &mut Command, input: &str) -> (i32, String, String) {
+    use std::io::Write;
+    let mut child = cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into())
+}
+
+#[test]
+fn file_from_stdin() {
+    let d = tmpdir("stdin");
+    std::fs::write(d.join("more.termplate"), "menu OTHER\n- QUIT \"Quit\"\n").unwrap();
+    let src = "include more.termplate\n\nmenu MAIN_MENU\n- BACKUP \"Back up\"\n\ncommand BACKUP\nrun:\n```bash\necho hi\n```\n";
+    let (code, out, err) = with_stdin(bin().args(["check", "-"]).current_dir(&d), src);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("ok (0 layouts, 0 panels, 2 menus, 1 commands"), "includes are relative to the current folder: {out}");
+    let (code, _, err) = with_stdin(bin().args(["check", "-"]).current_dir(&d), "menu M\n- NOPE open NOWHERE\n");
+    assert_eq!(code, 3);
+    assert!(err.contains("(stdin):2:"), "{err}");
+}
+
+#[test]
+fn name_option_loads_the_users_overrides() {
+    let cfg = tmpdir("name-cfg");
+    std::fs::create_dir_all(cfg.join("termplate/TOOL/overrides")).unwrap();
+    std::fs::write(cfg.join("termplate/TOOL/overrides/keys.termplate"), "keys MENU\n- up hyper+k\n").unwrap();
+    let src = "menu M\n- QUIT \"Quit\"\n";
+    let (code, _, err) = with_stdin(bin().args(["check", "-"]).env("XDG_CONFIG_HOME", &cfg), src);
+    assert_eq!(code, 0, "without a name no overrides are read: {err}");
+    let (code, _, err) = with_stdin(bin().args(["check", "--name", "TOOL", "-"]).env("XDG_CONFIG_HOME", &cfg), src);
+    assert_eq!(code, 3);
+    assert!(err.contains("TOOL/overrides/keys.termplate:1:"), "{err}");
+    let (code, _, err) = run(bin().args(["check", "--name", "lower", "-"]));
+    assert_eq!(code, 3);
+    assert!(err.contains("not a NAME"), "{err}");
+}
+
+#[test]
+fn serve_refuses_stdin() {
+    let (code, _, err) = run(bin().args(["serve", "-"]));
+    assert_eq!(code, 3);
+    assert!(err.contains("<(…)"), "{err}");
+}
+
+#[test]
+fn script_syntax_errors_point_into_the_file() {
+    let d = tmpdir("script");
+    let f = d.join("app.termplate");
+    std::fs::write(&f, "app X\n- termplate 0.1\n\ncommand C\n- shell sh\nrun:\n```\necho a\nif true; then\nfi fi\n```\n\ncommand D\n- shell no-such-shell-xyz\n- run x\n").unwrap();
+    let (code, _, err) = run(bin().arg("check").arg(&f));
+    assert_eq!(code, 3);
+    assert!(err.contains("app.termplate:10: command `C`:"), "{err}");
+    assert!(err.contains("app.termplate:13: command `D`: interpreter `no-such-shell-xyz` not found"), "{err}");
+}

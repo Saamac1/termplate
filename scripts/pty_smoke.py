@@ -78,7 +78,56 @@ legend:
 """
 
 
-def spawn(args, cwd=None):
+SCRIPT_APP = """app SCRIPTED
+- termplate 0.1
+
+vars
+- NAME text "world"
+
+layout MAIN
+mmll
+
+legend:
+- m MAIN_MENU
+- l LOG
+
+menu MAIN_MENU
+- GREET
+- MONITOR
+- QUIT
+
+command GREET
+- env NAME=$NAME
+- output LOG
+run:
+```bash
+# a comment, and a > redirection
+greeting="hello"
+echo "$greeting, ${NAME}!" > /dev/stdout
+echo "bash ${BASH_VERSION%%.*}"
+```
+
+command MONITOR
+- env NAME=$NAME
+- window split
+run:
+```
+echo "window: $NAME" > window.out
+```
+
+log LOG history 50
+"""
+
+# Stands in for tmux: records its arguments and runs the window's command.
+FAKE_TMUX = """#!/bin/sh
+if [ "$1" = "-V" ]; then echo "tmux 3.3a"; exit 0; fi
+echo "$@" > tmux.args
+for a; do last=$a; done
+sh -c "$last" &
+"""
+
+
+def spawn(args, cwd=None, stdin_data=None, env=None):
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 70, 0, 0))
 
@@ -87,7 +136,10 @@ def spawn(args, cwd=None):
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
     p = subprocess.Popen([BIN] + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         preexec_fn=ctty, cwd=cwd or os.path.dirname(APP), env={**os.environ, "LANG": "en_US.UTF-8"})
+                         preexec_fn=ctty, cwd=cwd or os.path.dirname(APP), env={**os.environ, "LANG": "en_US.UTF-8", **(env or {})})
+    if stdin_data is not None:
+        p.stdin.write(stdin_data.encode())
+        p.stdin.close()
     screen = bytearray()
 
     def drain():
@@ -107,6 +159,8 @@ def spawn(args, cwd=None):
 
 def finish(p):
     try:
+        if p.stdin.closed:
+            p.stdin = None
         out, err = p.communicate(timeout=5)
     except subprocess.TimeoutExpired:
         p.kill()
@@ -197,6 +251,39 @@ def main():
         os.write(tty, b"\r")
         code, out, _ = finish(p)
         ok &= check("form widget prints values", (code, out) == (0, "example.org\n2222\n"), (code, out))
+
+        # the Termplate file from stdin, as in a heredoc
+        menu = 'menu MAIN_MENU\n- BACKUP "Back up"\n- RESTORE "Restore"\n'
+        p, tty, screen = spawn(["menu", "-", "MAIN_MENU"], cwd=d, stdin_data=menu)
+        os.write(tty, b"j"); time.sleep(0.3)
+        os.write(tty, b"\r")
+        code, out, err = finish(p)
+        ok &= check("menu from stdin", (code, out) == (0, "RESTORE\n"), (code, out, err))
+
+        # an embedded bash script, and a window command through tmux
+        app = os.path.join(d, "scripted.termplate")
+        with open(app, "w") as f:
+            f.write(SCRIPT_APP)
+        bindir = os.path.join(d, "bin")
+        os.mkdir(bindir)
+        with open(os.path.join(bindir, "tmux"), "w") as f:
+            f.write(FAKE_TMUX)
+        os.chmod(os.path.join(bindir, "tmux"), 0o755)
+        env = {"TMUX": "/tmp/fake,1,0", "TMUX_PANE": "%7", "PATH": bindir + ":" + os.environ["PATH"]}
+        p, tty, screen = spawn(["run", app], cwd=d, env=env)
+        os.write(tty, b"\r"); time.sleep(0.8)
+        ok &= check("script output in the log", b"hello, world!" in screen and b"bash " in screen, bytes(screen[-400:]))
+        os.write(tty, b"j"); time.sleep(0.2)
+        os.write(tty, b"\r"); time.sleep(0.8)
+        args = open(os.path.join(d, "tmux.args")).read() if os.path.exists(os.path.join(d, "tmux.args")) else ""
+        ok &= check("window opened with split-window", args.startswith("split-window -t %7 -c "), args)
+        out = open(os.path.join(d, "window.out")).read() if os.path.exists(os.path.join(d, "window.out")) else ""
+        ok &= check("window command got its env", out == "window: world\n", out)
+        leftovers = [n for n in os.listdir(tempfile.gettempdir()) if n.startswith("termplate-%d-" % p.pid)]
+        ok &= check("temporary files removed", not leftovers, leftovers)
+        os.write(tty, b"\x11")
+        code, _, _ = finish(p)
+        ok &= check("quit after scripts", code == 0, code)
     sys.exit(0 if ok else 1)
 
 

@@ -10,7 +10,7 @@ open questions and assumptions are in [`CLARIFICATIONS.md`](CLARIFICATIONS.md).
 |---|---|
 | `termplate-core` | Parsing, includes and patches, model and load-time validation, layout solving, panel field detection, texts, key contexts, menu state, the runtime engine and its drawing model, the coprocess line protocol. No I/O. |
 | `termplate-term` | Terminal drawing (diffing) and input with crossterm on `/dev/tty`, themes, `NO_COLOR`, terminal restore. |
-| `termplate-shell` | Shell host (§3 expressions, `sh -c` command runs with timeouts, background commands with streamed output and cancellation, path completion), JSON protocol, XDG overrides, the event loop and the `termplate` CLI. |
+| `termplate-shell` | Shell host (§3 expressions, `sh -c` or `- shell` command runs with timeouts, `run:` scripts from private temporary files with a load-time `-n` check, `- window` commands in tmux or a new terminal window, background commands with streamed output and cancellation, path completion), JSON protocol, XDG overrides, the event loop and the `termplate` CLI. |
 
 ## Usage
 
@@ -23,8 +23,23 @@ coproc UI { termplate serve examples/backup/app.termplate MAIN_MENU; }  # coproc
 ```
 
 Widget mode (`menu`, `input`, `panel`) and `check` accept a file without an
-`app` block; `run` and `serve` need one. Exit status: 0 choice, 1 back,
+`app` block; `run` and `serve` need one. In such a widget file a menu item
+needs no action: choosing it prints its key. Exit status: 0 choice, 1 back,
 2 quit, 3 error.
+
+The file name `-` reads the Termplate file from stdin, so a whole program
+can be one shell script (`serve` takes `<(…)` instead, as its stdin is the
+protocol). Includes and the working directory are then the current folder,
+and `--name NAME` names the application for the user's overrides:
+
+```sh
+choice=$(termplate menu - MAIN_MENU <<'EOF'
+menu MAIN_MENU
+- BACKUP "Back up"
+- QUIT "Quit"
+EOF
+) || exit
+```
 
 ## Examples
 

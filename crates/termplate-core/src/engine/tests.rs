@@ -1277,6 +1277,87 @@ fn stop_cancels_a_running_command() {
     assert_eq!(e.log_lines("LOG"), ["SERVE cancelled"]);
 }
 
+#[test]
+fn widget_files_take_menu_items_without_actions() {
+    let src = "menu MAIN_MENU\n- BACKUP \"Varmuuskopioi\"\n- RESTORE \"Palauta\"\n- QUIT \"Lopeta\"\n";
+    let fs = crate::loader::MemFs::new().with("-", src);
+    assert!(crate::load(&fs, "-", &[], &mut TestHost::new()).is_err(), "an app needs the commands");
+    let m = crate::load_widget(&fs, "-", None, &[], &mut TestHost::new()).unwrap();
+    let mut host = TestHost::new();
+    let mut e = Engine::new(m, Mode::Widget);
+    e.set_size(40, 10);
+    e.start_widget(&mut host, "MAIN_MENU").unwrap();
+    key(&mut e, &mut host, KeyCode::Down);
+    key(&mut e, &mut host, KeyCode::Enter);
+    assert!(host.runs.is_empty());
+    assert!(e.take_effects().contains(&Effect::Exit { code: 0, output: Some("RESTORE".into()) }));
+}
+
+const SCRIPTED: &str = r#"app S
+- termplate 0.1
+
+vars
+- TARGET text "/mnt"
+- PASS text
+
+layout MAIN
+l
+
+legend:
+- l LOG
+
+log LOG history 50
+
+command COPY
+- env TARGET=$TARGET
+- output LOG
+- then MONITOR
+run:
+```bash
+echo "$TARGET"
+```
+
+command MONITOR
+- run htop
+- window popup
+- secret PASS env
+- on_error FAILED
+
+command FAILED
+- run echo failed
+- output LOG
+"#;
+
+#[test]
+fn scripts_run_with_their_interpreter() {
+    let (mut e, mut h) = background_app(SCRIPTED);
+    e.run_command(&mut h, "COPY", None);
+    let req = &h.runs[0];
+    assert!(req.script);
+    assert_eq!(req.cmdline, "echo \"$TARGET\"\n");
+    assert_eq!(req.shell.as_deref(), Some("bash"));
+    assert!(req.env.contains(&("TARGET".into(), "/mnt".into())));
+    assert!(e.has_jobs(), "a script runs in the background like `run`");
+}
+
+#[test]
+fn window_commands_are_started_and_forgotten() {
+    let (mut e, mut h) = background_app(SCRIPTED);
+    e.set_var("PASS", Value::Text("pw".into()));
+    h.run_results.insert("htop".into(), Outcome { status: 0, stderr: "no window could be opened\n".into(), ..Default::default() });
+    e.run_command(&mut h, "MONITOR", None);
+    let req = h.runs.last().unwrap();
+    assert_eq!(req.window, Some(crate::host::Window::Popup));
+    assert_eq!(req.timeout, None);
+    assert!(req.env.contains(&("PASS".into(), "pw".into())));
+    assert!(!e.has_jobs(), "Termplate does not wait for a window");
+    assert_eq!(e.log_lines("LOG"), ["no window could be opened"], "the host's warning is logged");
+    // on_error runs only when the window did not open
+    h.run_results.insert("htop".into(), Outcome { status: 1, stderr: "cannot open a window: tmux failed".into(), ..Default::default() });
+    e.run_command(&mut h, "MONITOR", None);
+    assert_eq!(h.runs.last().unwrap().cmdline, "echo failed");
+}
+
 // ----- background evaluation of panels and menus (spec §5, §7) ----------------
 
 fn async_app() -> (Engine, TestHost) {

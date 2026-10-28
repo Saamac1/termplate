@@ -176,10 +176,37 @@ pub fn eval_now(host: &mut dyn Host, req: &EvalRequest, scope: &Scope) -> EvalRe
     }
 }
 
+/// Where `- window` opens a command (spec §15.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    Tab,
+    Split,
+    Popup,
+}
+
+impl Window {
+    pub fn parse(s: &str) -> Option<Window> {
+        match s {
+            "tab" => Some(Window::Tab),
+            "split" => Some(Window::Split),
+            "popup" => Some(Window::Popup),
+            _ => None,
+        }
+    }
+}
+
 /// A fully resolved command run.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RunRequest {
+    /// The command line, or with `script` the script text (spec §6.1).
     pub cmdline: String,
+    /// The interpreter (`- shell`); `None` is `sh`.
+    pub shell: Option<String>,
+    /// `cmdline` is a script, run from a temporary file.
+    pub script: bool,
+    /// Run in a window of its own without waiting (spec §15.1). The
+    /// outcome tells whether the window opened; its `stderr` is a warning.
+    pub window: Option<Window>,
     pub env: Vec<(String, String)>,
     pub stdin: Option<String>,
     pub interactive: bool,
@@ -249,12 +276,20 @@ pub trait Host {
     fn complete_path(&mut self, _prefix: &str) -> Vec<String> {
         Vec::new()
     }
+
+    /// Load-time check of a command's interpreter and, when given, its
+    /// `run:` script (spec §6.1). The error may name a line of the script
+    /// (1-based).
+    fn check_script(&mut self, _shell: &str, _script: Option<&str>) -> Result<(), (Option<usize>, String)> {
+        Ok(())
+    }
 }
 
 /// A deterministic host for tests. Understands `$NAME`, `"literal"`, bare
 /// literals, `not X`, `X == Y`, `true`/`false`; command substitutions are
 /// answered from `outputs`, and runs are recorded and answered from
-/// `run_results` (default: success with empty output).
+/// `run_results` (default: success with empty output). A script line
+/// `SYNTAX ERROR` fails the load-time script check.
 #[derive(Debug, Default)]
 pub struct TestHost {
     pub outputs: BTreeMap<String, String>,
@@ -388,6 +423,16 @@ impl Host for TestHost {
 
     fn complete_path(&mut self, prefix: &str) -> Vec<String> {
         self.paths.iter().filter(|p| p.starts_with(prefix)).cloned().collect()
+    }
+
+    fn check_script(&mut self, shell: &str, script: Option<&str>) -> Result<(), (Option<usize>, String)> {
+        if self.reject.iter().any(|r| r == shell) {
+            return Err((None, format!("interpreter `{shell}` not found")));
+        }
+        match script.and_then(|s| s.lines().position(|l| l.trim() == "SYNTAX ERROR")) {
+            Some(i) => Err((Some(i + 1), "syntax error".into())),
+            None => Ok(()),
+        }
     }
 }
 

@@ -53,6 +53,22 @@ impl SourceFs for DiskFs {
     }
 }
 
+/// The executable `name` (a path, or a name looked up in `path`).
+pub fn find_program(name: &str, path: Option<&str>) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = |p: &Path| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+    if name.contains('/') {
+        let p = PathBuf::from(name);
+        return executable(&p).then_some(p);
+    }
+    path?.split(':').filter(|d| !d.is_empty()).map(|d| Path::new(d).join(name)).find(|p| executable(p))
+}
+
+/// `s` as one word for `sh`: in single quotes.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// `$XDG_CONFIG_HOME/termplate/APP`, falling back to `~/.config`.
 pub fn config_dir(app: &str, xdg: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
     let base = match xdg.filter(|x| !x.is_empty() && x.starts_with('/')) {

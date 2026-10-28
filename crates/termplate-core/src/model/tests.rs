@@ -258,10 +258,72 @@ fn command_errors() {
     assert!(err(&format!("{CMD}command C\n- run x\n- then open NOWHERE\n")).contains("unknown menu or panel or input or layout `NOWHERE` (tried NOWHERE)"));
     assert!(err(&format!("{CMD}command C\n- run x\n- then MISSING\n")).contains("unknown command `MISSING`"));
     assert!(err(&format!("{CMD}command C\n- run x\n- env lower=1\n")).contains("NAME=VALUE"));
-    assert!(err(&format!("{CMD}command C\n- confirm X\n")).contains("needs `run` or `then`"));
+    assert!(err(&format!("{CMD}command C\n- confirm X\n")).contains("needs `run`, `run:` or `then`"));
     assert!(err(&format!("{CMD}command C\n- run x\n- secret PASS file\n")).contains("stdin|env"));
     assert!(err(&format!("{CMD}command C\n- run x\n- retries 3\n")).contains("unknown field `retries`"));
     assert!(err(&format!("{CMD}command C\n- run x\n- then toggle TARGET\n")).contains("needs a bool variable or a panel"));
+}
+
+#[test]
+fn embedded_scripts_and_interpreters() {
+    let m = ok(&format!("{CMD}command B\n- env TARGET=$TARGET\n- output LOG\nrun:\n```bash\nset -e\n# copy\necho \"$TARGET\"\n```\n\ncommand S\n- shell zsh\n- run print hi\n\ncommand P\nrun:\n```\nexit 0\n```\n"));
+    let b = &m.commands["B"];
+    assert!(b.script);
+    assert_eq!(b.run.as_deref(), Some("set -e\n# copy\necho \"$TARGET\"\n"));
+    assert_eq!(b.shell.as_deref(), Some("bash"), "the fence's language picks the interpreter");
+    assert_eq!(m.commands["S"].shell.as_deref(), Some("zsh"));
+    assert!(!m.commands["S"].script);
+    assert_eq!(m.commands["P"].shell, None, "sh by default");
+    let m = ok(&format!("{CMD}command B\n- shell /usr/local/bin/bash\nrun:\n```bash\ntrue\n```\n\ncommand Q\n- shell python3\nrun:\n```python\nprint(1)\n```\n"));
+    assert_eq!(m.commands["B"].shell.as_deref(), Some("/usr/local/bin/bash"));
+    assert_eq!(m.commands["Q"].shell.as_deref(), Some("python3"));
+}
+
+#[test]
+fn embedded_script_errors() {
+    assert!(err(&format!("{CMD}command C\n- run x\nrun:\n```\ny\n```\n")).contains("either `- run` or `run:`"));
+    assert!(err(&format!("{CMD}command C\n- shell zsh\nrun:\n```bash\ny\n```\n")).contains("contradicts the script's language `bash`"));
+    assert!(err(&format!("{CMD}command C\nrun:\n```python\nprint(1)\n```\n")).contains("name the interpreter with `- shell`"));
+    assert!(err(&format!("{CMD}command C\n- shell zsh\n- then quit\n")).contains("`shell` needs"));
+    // the host's syntax check names the line in the Termplate file
+    let src = format!("{APP}{CMD}command C\nrun:\n```\necho a\nSYNTAX ERROR\n```\n");
+    let line = src.lines().position(|l| l == "SYNTAX ERROR").unwrap() + 1;
+    let e = build(&src).unwrap_err().to_string();
+    assert!(e.contains(&format!("t.termplate:{line}: command `C`: syntax error")), "{e}");
+}
+
+#[test]
+fn missing_interpreter_is_a_load_error() {
+    let blocks: Vec<RawBlock> =
+        parse("t.termplate", &format!("{APP}command C\n- shell fish\n- run echo\n")).unwrap().blocks().cloned().collect();
+    let (blocks, _) = merge(vec![], blocks, MergeMode::Base).unwrap();
+    let mut host = TestHost::new();
+    host.reject.push("fish".into());
+    assert!(Model::build(blocks, &mut host).unwrap_err().to_string().contains("interpreter `fish` not found"));
+}
+
+#[test]
+fn window_commands() {
+    let m = ok(&format!("{CMD}command A\n- run htop\n- window popup\n\ncommand B\n- run top\n- window\n- secret PASS env\n"));
+    assert_eq!(m.commands["A"].window, Some(Window::Popup));
+    assert_eq!(m.commands["B"].window, Some(Window::Tab));
+    assert!(err(&format!("{CMD}command C\n- run x\n- window tabs\n")).contains("`window [tab|split|popup]`"));
+    for bad in ["- output LOG", "- into OUT", "- run x interactive"] {
+        let e = err(&format!("{CMD}command C\n- run x\n- window\n{bad}\n"));
+        assert!(e.contains("cannot be combined with"), "{bad}: {e}");
+    }
+    assert!(err(&format!("{CMD}command C\n- run x\n- window split\n- secret PASS stdin\n")).contains("secret on stdin"));
+}
+
+#[test]
+fn single_file_app_with_several_languages() {
+    let mut m = ok("menu M\n- QUIT \"Quit\"\n\ntext fi\nM.QUIT Lopeta\n\ntext en\nM.QUIT Exit\n");
+    m.texts.language = Some("fi".into());
+    assert_eq!(m.texts.lookup("M.QUIT"), Some("Lopeta"));
+    m.texts.language = Some("en".into());
+    assert_eq!(m.texts.lookup("M.QUIT"), Some("Exit"));
+    m.texts.language = Some("sv".into());
+    assert_eq!(m.texts.lookup("M.QUIT"), Some("Quit"));
 }
 
 // ----- menus ----------------------------------------------------------------------
