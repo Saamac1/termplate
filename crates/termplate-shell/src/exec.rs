@@ -51,10 +51,18 @@ pub type TerminalHandover = Arc<dyn Fn(bool) + Send + Sync>;
 pub struct ProcessRunner {
     pub handover: Option<TerminalHandover>,
     pub kill_grace: Option<Duration>,
+    /// No terminal (`termplate render`): `interactive` and `window`
+    /// commands run captured with stdin closed, their output dropped.
+    pub headless: bool,
 }
 
 impl CommandRunner for ProcessRunner {
     fn run(&mut self, req: &RunRequest) -> Outcome {
+        if self.headless && (req.interactive || req.window.is_some()) {
+            let req = RunRequest { interactive: false, window: None, ..req.clone() };
+            let out = run_captured(&req, self.kill_grace.unwrap_or(KILL_GRACE));
+            return Outcome { status: out.status, timed_out: out.timed_out, ..Default::default() };
+        }
         if let Some(kind) = req.window {
             let handover = self.handover.clone();
             return crate::window::open(req, kind, &|r: &RunRequest| {
@@ -415,6 +423,18 @@ mod tests {
     }
 
     #[test]
+    fn headless_runs_interactive_and_window_commands_captured() {
+        let mut runner = ProcessRunner { headless: true, ..Default::default() };
+        let mut r = req("echo hidden; test -t 0 && exit 9; exit 3");
+        r.interactive = true;
+        let out = runner.run(&r);
+        assert_eq!((out.status, out.stdout.as_str()), (3, ""), "no terminal, output dropped");
+        r.interactive = false;
+        r.window = Some(termplate_core::Window::Popup);
+        assert_eq!(runner.run(&r).status, 3, "no window is opened");
+    }
+
+    #[test]
     fn non_utf8_output_is_lossy() {
         let out = run_captured(&req("printf '\\377ok'"), KILL_GRACE);
         assert!(out.stdout.ends_with("ok"));
@@ -447,7 +467,7 @@ mod tests {
     #[test]
     fn spawn_does_not_block_and_can_be_cancelled() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut runner = ProcessRunner { handover: None, kill_grace: Some(Duration::from_millis(200)) };
+        let mut runner = ProcessRunner { kill_grace: Some(Duration::from_millis(200)), ..Default::default() };
         let cancel = Arc::new(AtomicBool::new(false));
         let t = Instant::now();
         assert!(runner.spawn(&req("echo started; sleep 5"), 1, tx, cancel.clone()));
@@ -479,7 +499,7 @@ mod tests {
         use std::sync::Mutex;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let c2 = calls.clone();
-        let mut runner = ProcessRunner { handover: Some(Arc::new(move |b| c2.lock().unwrap().push(b))), kill_grace: None };
+        let mut runner = ProcessRunner { handover: Some(Arc::new(move |b| c2.lock().unwrap().push(b))), ..Default::default() };
         let mut r = req("true");
         r.interactive = true;
         let out = runner.run(&r);

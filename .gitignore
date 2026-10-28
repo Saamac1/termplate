@@ -1,1 +1,4 @@
 target/
+.DS_Store
+# The workspace Cargo.lock at the root is tracked; per-crate ones are stray.
+crates/*/Cargo.lock

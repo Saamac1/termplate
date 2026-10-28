@@ -414,6 +414,36 @@ done
 - Arvo on rivin loppu; rivinvaihdot ja kenoviivat koodataan (`\n`, `\\`).
 - Protokolla on oletuksena rivipohjainen. Valitsin `--json` vaihtaa sen JSON Linesiksi muita kieliä varten.
 
+#### 14.4 Testitila
+
+`termplate render` ajaa minkä tahansa tilan (`run`, `menu`, `input`, `panel`, `serve`) ilman päätettä. Sitä ohjataan askeltiedostolla, ja ruudut, tapahtumat ja tulos tulostetaan stdoutiin. Näin automaattitestit eivät tarvitse pseudopäätettä.
+
+```bash
+termplate render --size 80x24 --steps steps.txt menu ui.termplate MAIN_MENU
+```
+
+```
+# steps.txt
+key j
+expect Palauta
+key enter
+wait
+```
+
+- `--size LxK` (oletus `80x24`) on ruudun koko. `--steps TIEDOSTO` lukee askeleet (`-` stdinistä, jolloin Termplate-tiedosto ei voi tulla stdinistä). Ilman askeleita odotetaan, että laskenta valmistuu, ja tulostetaan yksi ruutu.
+- **Askeleet**, yksi riviä kohti, `#` aloittaa kommenttirivin:
+  - `key NÄPPÄIN…`: näppäimet kuten `keys`-lohkossa (`j`, `enter`, `ctrl+q`).
+  - `type TEKSTI`: rivin loppu merkkeinä.
+  - `mouse SIDONTA X Y`: `click`, `rclick`, `wheel.up` jne. ruutuun.
+  - `wait [AIKA]`: kunnes yksikään komento tai lauseke ei ole käynnissä (oletusraja 30 s; rajan ylitys on virhe).
+  - `sleep AIKA`: antaa ajan kulua (`refresh`, virtaava tuloste).
+  - `resize LxK`, `screen` ja `send VIESTI` (koprosessitilan viesti isännältä).
+  - `expect TEKSTI` ja `reject TEKSTI`: ruudulla on oltava teksti, tai sitä ei saa olla.
+- **Tuloste:** `screen` tulostaa rivin `--- screen LxK` ja ruudun rivit loppuvälilyönnit poistettuina. Koprosessitilan tapahtumat tulevat riveinä `--- event …` sitä mukaa kuin ne syntyvät. Kun ohjelma päättyy, tulostetaan `--- exit KOODI` ja widget-tilan tulos.
+- **Paluuarvo:** ohjelman oma (luku 14.1); askelvirhe 3; epäonnistunut `expect` tai `reject` 4, jolloin stderriin tulee askeleen rivinumero ja ruutu. Ohjelman päätyttyä vain `wait` ja `sleep` ovat sallittuja.
+- **Komennot** ajetaan oikealla isännällä. `interactive`- ja `window`-komennot ajetaan ilman päätettä ja ikkunaa, stdin suljettuna ja tuloste hylättynä. Kun askeleet loppuvat, käynnissä olevat komennot keskeytetään.
+- Ruutu on piirtomalli tekstinä ilman värejä. Päätteen piirto ja syöte (`/dev/tty`, Esc-näppäimen ajoitus) testataan erikseen pseudopäätteellä.
+
 ### 15. Komentojen ajo ja turvallisuus
 
 - Komennot ajetaan `sh -c`:llä (tai `- shell`-määreen tulkilla, luku 6) ja välitetyt arvot ympäristömuuttujina; käyttäjän syötettä ei koskaan sijoiteta komentoriviin.
@@ -478,7 +508,7 @@ trait Host {
 
 Ei avoimia kysymyksiä.
 
-Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13).
+Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-tiedostot ilman `app`-lohkoa (luku 2), komennon ympäristö ja `$( … )`-lausekkeiden pääsy kaikkiin muuttujiin (luku 6), kursoritoimintojen nimet (luku 9), polun täydennys ja alueiden numerointi (luvut 4 ja 8), erillinen ikkuna taustakomennoille (luku 15.1), yhden tiedoston sovellus (luku 2), upotetut skriptit ja tulkin valinta (luku 6.1), Termplate-tiedosto stdinistä (luku 14.1), säilytettyjen ANSI-värien piirto (luku 12), komennon aikakatkaisu (luku 15), peliohjaimen poisto (luku 9), teemat ohituksina eikä tiedostoina (luvut 11 ja 13), testitila ilman päätettä (luku 14.4).
 
 ### Liite B. Esimerkit
 

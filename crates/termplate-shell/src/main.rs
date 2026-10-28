@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::OnceLock;
 
 use termplate_core::engine::{Engine, Mode};
 use termplate_core::loader::{dirname, load_tree, SourceFs};
@@ -9,6 +10,7 @@ use termplate_core::text::language_from_env;
 use termplate_core::Model;
 use termplate_shell::exec::ProcessRunner;
 use termplate_shell::fs::{config_dir, override_files, DiskFs};
+use termplate_shell::headless::{self, Step};
 use termplate_shell::host::ShellHost;
 use termplate_shell::runloop::{self, terminal_handover, Protocol};
 
@@ -25,9 +27,22 @@ usage:
   termplate serve [--json] FILE [NAME]
                                      coprocess mode: commands on stdin,
                                      events on stdout
+  termplate render [--size WxH] [--steps FILE] COMMAND ARGS…
+                                     run, menu, input, panel or serve
+                                     without a terminal, driven by the
+                                     steps (FILE `-`: stdin); prints the
+                                     screens, events and result
 FILE `-` reads the Termplate file from stdin (not with serve; use <(…));
 --name NAME names the application of such a file (user overrides)
-exit status: 0 choice, 1 back, 2 quit, 3 error";
+exit status: 0 choice, 1 back, 2 quit, 3 error, 4 failed render expectation";
+
+/// `termplate render`: no terminal (spec §14.4).
+struct Headless {
+    size: (usize, usize),
+    steps: Vec<(usize, Step)>,
+}
+
+static HEADLESS: OnceLock<Headless> = OnceLock::new();
 
 /// The root file as given, or one read from stdin or a pipe (`-`,
 /// `<(…)`): such a file has no folder of its own, so its includes and
@@ -81,6 +96,10 @@ fn main() -> ExitCode {
 
 fn real_main(args: &[String]) -> Result<u8, String> {
     let mut argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    if argv.first() == Some(&"render") {
+        argv.remove(0);
+        render_options(&mut argv)?;
+    }
     let mut name = None;
     if let Some(i) = argv.iter().position(|a| *a == "--name") {
         let n = *argv.get(i + 1).ok_or("--name needs a NAME")?;
@@ -147,10 +166,44 @@ fn real_main(args: &[String]) -> Result<u8, String> {
     }
 }
 
+/// Takes `render`'s own options from the front of `argv`.
+fn render_options(argv: &mut Vec<&str>) -> Result<(), String> {
+    let mut size = headless::DEFAULT_SIZE;
+    let mut steps_file = None;
+    while let Some(opt @ ("--size" | "--steps")) = argv.first().copied() {
+        let v = *argv.get(1).ok_or(format!("{opt} needs a value"))?;
+        if opt == "--size" {
+            size = headless::parse_size(v).ok_or(format!("--size {v}: expected WxH, e.g. 80x24"))?;
+        } else {
+            steps_file = Some(v);
+        }
+        argv.drain(..2);
+    }
+    let steps = match steps_file {
+        None => headless::default_steps(),
+        Some("-") => {
+            if argv.contains(&"-") {
+                return Err("the steps and the Termplate file cannot both come from stdin".into());
+            }
+            let mut src = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut src).map_err(|e| format!("cannot read stdin: {e}"))?;
+            headless::parse_steps(&src).map_err(|e| format!("steps: {e}"))?
+        }
+        Some(f) => {
+            let src = std::fs::read_to_string(f).map_err(|e| format!("cannot read {f}: {e}"))?;
+            headless::parse_steps(&src).map_err(|e| format!("{f}: {e}"))?
+        }
+    };
+    let _ = HEADLESS.set(Headless { size, steps });
+    Ok(())
+}
+
 /// Loads `source`. With `widget`, a file without an `app` block is accepted
 /// (spec §2); `run` and `serve` require one.
 fn load(source: &Source, widget: bool) -> Result<(Model, ShellHost<ProcessRunner>), String> {
-    let mut host = ShellHost::new(ProcessRunner { handover: Some(terminal_handover()), kill_grace: None });
+    let headless = HEADLESS.get().is_some();
+    let handover = (!headless).then(terminal_handover);
+    let mut host = ShellHost::new(ProcessRunner { handover, kill_grace: None, headless });
     let file = source.root.as_str();
 
     // The app name decides where the user's overrides live. A piped file
@@ -212,11 +265,22 @@ fn interactive(source: Source, mode: Mode, target: Option<&str>, proto: Option<P
 
 fn start(model: Model, mut host: ShellHost<ProcessRunner>, mode: Mode, target: Option<&str>, proto: Option<Protocol>) -> Result<u8, String> {
     let mut engine = Engine::new(model, mode);
-    let (w, h) = termplate_term::terminal_size();
+    let (w, h) = HEADLESS.get().map_or_else(termplate_term::terminal_size, |h| h.size);
     engine.set_size(w, h);
     match target {
         Some(t) => engine.start_widget(&mut host, t)?,
         None => engine.start_app(&mut host)?,
+    }
+    if let Some(hl) = HEADLESS.get() {
+        let out = std::io::stdout().lock();
+        return match headless::run(&mut engine, &mut host, proto, &hl.steps, out).map_err(|e| format!("stdout: {e}"))? {
+            headless::Outcome::Done(code) => Ok(code.clamp(0, 255) as u8),
+            headless::Outcome::Failed { line, message, expect: true } => {
+                eprintln!("termplate: step {line}: {message}");
+                Ok(headless::EXPECT_FAILED as u8)
+            }
+            headless::Outcome::Failed { line, message, .. } => Err(format!("step {line}: {message}")),
+        };
     }
     let done = runloop::run(&mut engine, &mut host, proto).map_err(|e| format!("terminal: {e}"))?;
     if let Some(out) = done.output {

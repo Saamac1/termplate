@@ -543,6 +543,11 @@ impl Engine {
         r
     }
 
+    /// The screen size (columns, rows).
+    pub fn size(&self) -> (usize, usize) {
+        self.size
+    }
+
     pub fn busy(&self) -> bool {
         self.busy || !self.jobs.is_empty()
     }

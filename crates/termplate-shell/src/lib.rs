@@ -4,6 +4,7 @@
 pub mod exec;
 pub mod expr;
 pub mod fs;
+pub mod headless;
 pub mod host;
 pub mod json;
 pub mod runloop;

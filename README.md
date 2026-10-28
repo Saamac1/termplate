@@ -50,6 +50,17 @@ EOF
 ## Tests
 
 ```sh
-cargo test                     # unit and CLI tests
-python3 scripts/pty_smoke.py   # end-to-end on a pseudo-terminal (after cargo build)
+cargo test                     # unit, CLI and end-to-end tests (`termplate render`)
+python3 scripts/pty_smoke.py   # terminal paths on a pseudo-terminal (after cargo build)
+```
+
+`termplate render` runs any mode without a terminal, driven by a steps
+file, and prints the screens, events and result (spec §14.4). End-to-end
+tests use it instead of a pseudo-terminal:
+
+```sh
+printf 'key j\nexpect Restore\nkey enter\nwait\n' |
+  termplate render --size 80x24 --steps - menu examples/backup/app.termplate MAIN_MENU
+# --- exit 0
+# RESTORE
 ```
