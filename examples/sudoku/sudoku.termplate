@@ -8,6 +8,7 @@
 app SUDOKU
 - termplate 0.1
 - layout MAIN
+- language en
 - start RENDER
 
 vars
