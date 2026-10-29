@@ -84,8 +84,10 @@ legend:
 - l LOG size.height 6
 ```
 
-- Alueiden on oltava suorakulmioita, ja koko asettelun on oltava jaettavissa suorilla viivoilla.
-- Puuttuva mitta täyttää jäljelle jäävän tilan. Piirros on pienin sallittu koko.
+- Alueiden on oltava suorakulmioita. Asettelun ei tarvitse olla jaettavissa suorilla viivoilla (muutos RLML:ään).
+- **Raidat:** asettelu on ruudukko sarakkeita ja rivejä. Piirroksessa sarakkeen tai rivin raja on jokaisessa kohdassa, jossa jonkin alueen reuna on, joten piirroksessa kohdakkain olevat reunat ovat kohdakkain myös ruudulla. Ruudukkomuodossa (luku 4.1) raidat kirjoitetaan suoraan.
+- **Mitat:** legendin `size.width` ja `size.height` antavat alueen raitojen koon. Jos alue kattaa useamman raidan, koko jaetaan niille raidoille, joilla ei vielä ole kokoa, niiden piirrosleveyden suhteessa. Ristiriitaiset mitat ja solumäärien ja prosenttien sekoittaminen samoilla raidoilla ovat latausvirheitä.
+- Raita ilman mittaa täyttää jäljelle jäävän tilan muiden tällaisten kanssa niiden piirrosleveyden suhteessa. Piirros on pienin sallittu koko, ja alueen sisältö (paneelin piirros ja reuna) kasvattaa tarvittaessa sen raitoja. Jos kaikilla raidoilla on mitta, ylimääräinen tila menee viimeiselle.
 - Alueeseen sijoitetaan paneeli, valikko (uusi: RLML:ssä valikot ovat vain modaaleja), loki tai tulosteen näkymä.
 - **Uutta:** `- m MAIN_MENU` upottaa valikon pysyvästi alueeseen; fokus siirtyy alueiden välillä toiminnoilla `next_area` ja `prev_area`.
 - **Numeroidut alueet:** fokusoitavat alueet (valikko, loki, syöte, syötekentällinen paneeli, kursorillisen ruudukon paneeli) numeroidaan 1–9 siinä järjestyksessä, jossa ne ovat legendissä. Toiminto `focus N` siirtää fokuksen alueeseen N; modaalin ollessa auki se ei tee mitään. Näppäinrivi: `- focus 2 g`.
@@ -110,8 +112,8 @@ LOG    LOG
 
 - Otsikossa on sana `grid`; vaihtoehdossa se tulee ennen ehtoa: `layout MAIN.narrow grid when width < 60`.
 - Ruudukon rivit ovat välilyönnein erotettuja alueita: paneelin, valikon, lokin tai syötteen nimi, tarvittaessa argumentteineen (`STATS($TARGET)`). Sama nimi viereisissä soluissa venyttää alueen niiden yli; alueiden on oltava suorakulmioita kuten piirroksessa. Jokaisella rivillä on yhtä monta solua, ja välilyöntejä saa käyttää tasaamiseen.
-- `- columns` antaa koon jokaiselle sarakkeelle ja `- rows` jokaiselle riville: solumäärä, prosentti tai `*` (täyttää jäljelle jäävän tilan, tasan muiden `*`-raitojen kanssa). Jos `- columns`- tai `- rows`-rivi puuttuu, kaikki sen raidat ovat `*`.
-- Useamman raidan yli venyvä alue saa raitojen summan, kun ne ovat kaikki solumääriä tai kaikki prosentteja. Muuten alue täyttää jäljelle jäävän tilan.
+- Jokainen ruudukon solu on oma raitansa. `- columns` antaa koon jokaiselle sarakkeelle ja `- rows` jokaiselle riville: solumäärä, prosentti tai `*` (täyttää jäljelle jäävän tilan, tasan muiden `*`-raitojen kanssa). Jos `- columns`- tai `- rows`-rivi puuttuu, kaikki sen raidat ovat `*`.
+- Useamman raidan yli venyvä alue on aina raitojensa summa, myös kun ne ovat eri lajia (`30 *`).
 - Rivit `- columns` ja `- rows` voivat olla ennen ruudukkoa (tyhjä rivi välissä sallitaan) tai heti sen jälkeen. Legendiä ei ole.
 - Alueet numeroidaan (`focus N`) lukujärjestyksessä: rivit ylhäältä alas, solut vasemmalta oikealle.
 

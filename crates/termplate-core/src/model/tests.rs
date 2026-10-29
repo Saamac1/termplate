@@ -109,19 +109,20 @@ const LAYOUT: &str = "layout MAIN\nsssmm\nsssmm\nlllll\n\nlegend:\n- s STATUS si
 fn layout_with_legend() {
     let m = ok(LAYOUT);
     let l = &m.layouts["MAIN"][0];
-    assert_eq!(l.areas[&'s'], AreaDef { target: "STATUS".into(), args: vec![], width: Some(Dim::Cells(30)), height: None });
-    assert_eq!(l.areas[&'l'].height, Some(Dim::Cells(6)));
+    assert_eq!(l.areas[&'s'], AreaDef { target: "STATUS".into(), args: vec![] });
+    assert_eq!(l.grid.columns.iter().map(|t| t.size).collect::<Vec<_>>(), [Some(Dim::Cells(30)), None]);
+    assert_eq!(l.grid.rows.iter().map(|t| t.size).collect::<Vec<_>>(), [None, Some(Dim::Cells(6))]);
     assert_eq!(m.logs["LOG"], LogDef { name: "LOG".into(), history: 500, merge: false, more: true, keep_ansi: false });
 }
 
 #[test]
 fn layout_size_forms() {
-    let m = ok("layout L\nab\n\nlegend:\n- a M size 20x10\n- b M size.width 25% size.height *\n\nmenu M\n- QUIT\n");
+    let m = ok("layout L\nab\nac\n\nlegend:\n- a M size 20x10\n- b M size.width 25% size.height *\n- c M\n\nmenu M\n- QUIT\n");
     let l = &m.layouts["L"][0];
-    assert_eq!((l.areas[&'a'].width, l.areas[&'a'].height), (Some(Dim::Cells(20)), Some(Dim::Cells(10))));
-    assert_eq!((l.areas[&'b'].width, l.areas[&'b'].height), (Some(Dim::Percent(25)), None));
-    let sizes = m.area_sizes(l, 200, 50);
-    assert_eq!(sizes[&'b'].width, Some(50));
+    assert_eq!(l.grid.columns.iter().map(|t| t.size).collect::<Vec<_>>(), [Some(Dim::Cells(20)), Some(Dim::Percent(25))]);
+    assert_eq!(l.grid.rows.iter().map(|t| t.size).collect::<Vec<_>>(), [Some(Dim::Cells(5)), Some(Dim::Cells(5))], "`a` spans both rows: 10 is shared");
+    let r = l.grid.solve(&m.area_sizes(l), 200, 50).rects;
+    assert_eq!((r[&'a'].w, r[&'b'].w), (20, 180), "all columns sized: the extra goes to the last");
 }
 
 #[test]
@@ -156,7 +157,7 @@ fn grid_layout_is_the_same_as_the_drawing() {
     let targets = |l: &LayoutDef| l.order.iter().map(|c| l.areas[c].clone()).collect::<Vec<_>>();
     assert_eq!(targets(g), targets(d), "same targets, sizes and numbering order");
     let solve = |m: &Model, l: &LayoutDef| {
-        let r = l.grid.solve(&m.area_sizes(l, 100, 30), 100, 30).rects;
+        let r = l.grid.solve(&m.area_sizes(l), 100, 30).rects;
         l.order.iter().map(|c| r[c]).collect::<Vec<_>>()
     };
     assert_eq!(solve(&m, g), solve(&drawn, d));
@@ -168,10 +169,8 @@ fn grid_layout_spans_variants_and_sizes() {
     let m = ok(src);
     let l = &m.layouts["L"][0];
     assert_eq!(l.order.iter().map(|c| l.areas[c].target.as_str()).collect::<Vec<_>>(), ["A", "B", "C"]);
-    assert_eq!((l.areas[&l.order[0]].width, l.areas[&l.order[0]].height), (Some(Dim::Percent(20)), None));
+    assert_eq!(l.grid.columns.iter().map(|t| t.size).collect::<Vec<_>>(), [Some(Dim::Percent(20)), Some(Dim::Percent(30))]);
     assert_eq!(m.choose_layout("L", 39, 20).unwrap().name, "L.narrow");
-    assert_eq!(track_span(Some(&[Some(Dim::Cells(3)), Some(Dim::Cells(4))]), 0, 2), Some(Dim::Cells(7)));
-    assert_eq!(track_span(Some(&[Some(Dim::Cells(3)), None]), 0, 2), None);
 }
 
 #[test]

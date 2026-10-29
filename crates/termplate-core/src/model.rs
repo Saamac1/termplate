@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::error::{LoadError, LoadErrors};
 use crate::host::{Expr, ExprKind, Host, Window};
 use crate::keys::{action_alias, parse_binding, Binding, Keymap, Mode, BUILTIN_CONTEXTS, KEY_ACTIONS};
-use crate::layout::{analyze, AreaSize, Dim, Dims, Grid, Rect, SizeCond};
+use crate::layout::{analyze, analyze_grid, AreaSize, Dim, Dims, Grid, Rect, SizeCond};
 use crate::names::{self, is_name, is_name_with_variant};
 use crate::panel;
 use crate::style::{Border, StyleSheet, VARIANTS};
@@ -111,8 +111,6 @@ impl Action {
 pub struct AreaDef {
     pub target: String,
     pub args: Vec<Arg>,
-    pub width: Option<Dim>,
-    pub height: Option<Dim>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -627,7 +625,7 @@ impl Model {
             return Some(v);
         }
         let fits = |d: &LayoutDef| {
-            let (w, h) = d.grid.min_size(&self.area_sizes(d, width, height));
+            let (w, h) = d.grid.min_size(&self.area_sizes(d), width, height);
             width >= w && height >= h
         };
         let base_def = defs.iter().find(|d| d.name == base)?;
@@ -637,21 +635,15 @@ impl Model {
         defs.iter().find(|d| d.name != base && d.when.is_none() && fits(d)).or(Some(base_def))
     }
 
-    /// Area sizes in cells for a window of `width`×`height`. A styled
-    /// border adds two cells to the content's minimum.
-    pub fn area_sizes(&self, l: &LayoutDef, width: usize, height: usize) -> BTreeMap<char, AreaSize> {
+    /// The content's minimum size of each area in cells. A styled border
+    /// adds two cells.
+    pub fn area_sizes(&self, l: &LayoutDef) -> BTreeMap<char, AreaSize> {
         l.areas
             .iter()
             .map(|(c, a)| {
                 let (mw, mh) = self.panels.get(&a.target).map(|p| (p.width, p.height)).unwrap_or((0, 0));
                 let border = if self.area_border(&a.target).is_some() { 2 } else { 0 };
-                let size = AreaSize {
-                    width: a.width.map(|d| d.resolve(width)),
-                    height: a.height.map(|d| d.resolve(height)),
-                    min_width: mw + border,
-                    min_height: mh + border,
-                };
-                (*c, size)
+                (*c, AreaSize { min_width: mw + border, min_height: mh + border })
             })
             .collect()
     }
@@ -863,16 +855,13 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
         None
     };
     if grid_form {
-        let (grid, areas, order, dims) = build_grid_areas(bld, b)?;
-        if let Err(e) = grid.check_conflicts(&dims) {
-            bld.err(b.err(e));
-        }
+        let (grid, areas, order) = build_grid_areas(bld, b)?;
         return Some(LayoutDef { name: b.name.clone(), base, when, grid, areas, order });
     }
     if !b.items.is_empty() {
         bld.err(b.items[0].err("a drawn layout has no items (`layout NAME grid` takes `- columns` and `- rows`)"));
     }
-    let grid = match analyze(&b.drawing) {
+    let mut grid = match analyze(&b.drawing) {
         Ok(g) => g,
         Err(e) => {
             bld.err(LoadError::new(&b.file, b.drawing_line.max(b.line), e));
@@ -915,7 +904,7 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
         if !target.is_empty() {
             check_args(bld, item, &target, &args);
         }
-        let mut area = AreaDef { target, args, width: None, height: None };
+        let (mut width, mut height) = (None, None);
         let mut i = opts_from;
         while i < item.tokens.len() {
             let word = item.tokens[i].text.as_str();
@@ -925,11 +914,11 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
             };
             let r = match word {
                 "size" => Dim::parse_pair(value).map(|(w, h)| {
-                    area.width = w;
-                    area.height = h;
+                    width = w;
+                    height = h;
                 }),
-                "size.width" => Dim::parse(value).map(|d| area.width = d),
-                "size.height" => Dim::parse(value).map(|d| area.height = d),
+                "size.width" => Dim::parse(value).map(|d| width = d),
+                "size.height" => Dim::parse(value).map(|d| height = d),
                 _ => Err(format!("unknown area option `{word}` (size WxH, size.width N, size.height N)")),
             };
             if let Err(e) = r {
@@ -938,8 +927,8 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
             }
             i += 2;
         }
-        dims.insert(ch, (area.width, area.height));
-        if areas.insert(ch, area).is_some() {
+        dims.insert(ch, (width, height));
+        if areas.insert(ch, AreaDef { target, args }).is_some() {
             bld.err(item.err(format!("duplicate legend `{ch}`")));
         } else {
             order.push(ch);
@@ -950,7 +939,7 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
             bld.err(b.err(format!("layout area `{ch}` has no legend entry")));
         }
     }
-    if let Err(e) = grid.check_conflicts(&dims) {
+    if let Err(e) = grid.set_sizes(&dims) {
         bld.err(b.err(e));
     }
     Some(LayoutDef { name: b.name.clone(), base, when, grid, areas, order })
@@ -961,14 +950,12 @@ const GRID_AREA_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 
 /// `layout NAME grid` (spec §4.1): rows of area names, a name repeated
 /// over neighbouring cells spans them, and `- columns` / `- rows` give one
-/// size per grid column and row. It becomes the same [`Grid`] as a drawing
-/// with one drawing cell per grid cell.
-#[allow(clippy::type_complexity)]
-fn build_grid_areas(bld: &mut Builder, b: &RawBlock) -> Option<(Grid, BTreeMap<char, AreaDef>, Vec<char>, Dims)> {
+/// size per grid column and row: the grid's tracks.
+fn build_grid_areas(bld: &mut Builder, b: &RawBlock) -> Option<(Grid, BTreeMap<char, AreaDef>, Vec<char>)> {
     if b.has_legend {
         bld.err(b.err("a grid layout names its areas in the grid and has no legend"));
     }
-    let (mut columns, mut rows): (Option<Vec<Option<Dim>>>, Option<Vec<Option<Dim>>>) = (None, None);
+    let (mut columns, mut rows): (Option<Vec<Option<Dim>>>, _) = (None, None);
     for item in &b.items {
         let slot = match item.key() {
             "columns" => &mut columns,
@@ -1018,23 +1005,25 @@ fn build_grid_areas(bld: &mut Builder, b: &RawBlock) -> Option<(Grid, BTreeMap<c
         bld.err(LoadError::new(&b.file, line_of(y), "every grid row must have the same number of areas"));
         return None;
     }
-    let grid = match analyze(&drawing) {
+    let mut grid = match analyze_grid(&drawing) {
         Ok(g) => g,
         Err(e) => {
             bld.err(LoadError::new(&b.file, line_of(0), named(e)));
             return None;
         }
     };
-    for (what, sizes, n) in [("columns", &columns, grid.width), ("rows", &rows, grid.height)] {
-        if let Some(s) = sizes
-            && s.len() != n {
-                bld.err(b.err(format!("`{what}` gives {} size(s) but the grid has {n} {what}", s.len())));
-                return None;
-            }
+    for (what, sizes, tracks) in [("columns", columns, &mut grid.columns), ("rows", rows, &mut grid.rows)] {
+        let Some(sizes) = sizes else { continue };
+        if sizes.len() != tracks.len() {
+            bld.err(b.err(format!("`{what}` gives {} size(s) but the grid has {} {what}", sizes.len(), tracks.len())));
+            return None;
+        }
+        for (t, size) in tracks.iter_mut().zip(sizes) {
+            t.size = size;
+        }
     }
     let mut areas = BTreeMap::new();
     let mut order = Vec::new();
-    let mut dims = Dims::new();
     for ((cell, y), ch) in names.iter().zip(GRID_AREA_CHARS.chars()) {
         let item = match RawItem::new(&b.file, line_of(*y), b.namespace.clone(), cell) {
             Ok(item) => item,
@@ -1055,31 +1044,10 @@ fn build_grid_areas(bld: &mut Builder, b: &RawBlock) -> Option<(Grid, BTreeMap<c
         if !target.is_empty() {
             check_args(bld, &item, &target, &args);
         }
-        let r = grid.areas[&ch];
-        let width = track_span(columns.as_deref(), r.x, r.w);
-        let height = track_span(rows.as_deref(), r.y, r.h);
-        dims.insert(ch, (width, height));
-        areas.insert(ch, AreaDef { target, args, width, height });
+        areas.insert(ch, AreaDef { target, args });
         order.push(ch);
     }
-    Some((grid, areas, order, dims))
-}
-
-/// The size of an area spanning grid tracks `from..from + len`: their sum
-/// when all are cells or all percentages, otherwise it fills.
-fn track_span(sizes: Option<&[Option<Dim>]>, from: usize, len: usize) -> Option<Dim> {
-    let spanned = sizes?.get(from..from + len)?;
-    match spanned.iter().copied().collect::<Option<Vec<Dim>>>()?.as_slice() {
-        [one] => Some(*one),
-        many if many.iter().all(|d| matches!(d, Dim::Cells(_))) => {
-            Some(Dim::Cells(many.iter().map(|d| if let Dim::Cells(n) = d { *n } else { 0 }).sum()))
-        }
-        many if many.iter().all(|d| matches!(d, Dim::Percent(_))) => {
-            let p: usize = many.iter().map(|d| if let Dim::Percent(p) = d { *p as usize } else { 0 }).sum();
-            Some(Dim::Percent(p.min(100) as u8))
-        }
-        _ => None,
-    }
+    Some((grid, areas, order))
 }
 
 /// Splits a trailing alignment word off `tokens[from..]`.

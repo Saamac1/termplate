@@ -1,14 +1,15 @@
-//! Layout drawings (spec §4).
+//! Layouts (spec §4) as a grid of tracks.
 //!
-//! Each character of the drawing names an area. Areas must be rectangles and
-//! the drawing must be divisible by straight cuts that run across the whole
-//! remaining region (a guillotine partition). Sizes: `size.width N` /
-//! `size.height N` fix a dimension in terminal cells; the other areas share
+//! A layout is a grid of columns and rows; every area covers a rectangle
+//! of whole tracks. A drawing gets a track boundary wherever an area edge
+//! is, so edges that line up in the drawing line up on screen. A grid
+//! layout (§4.1) has one track per grid cell. Sizes belong to tracks: a
+//! track is cells, a percentage of the window or `*`; the `*` tracks share
 //! what is left in proportion to their extent in the drawing, never going
 //! below their minimum size.
 
-use std::collections::BTreeMap;
-
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
     pub x: usize,
@@ -26,36 +27,44 @@ impl Rect {
     }
 }
 
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
-    /// Children side by side (cut by vertical lines).
     Columns,
-    /// Children stacked (cut by horizontal lines).
     Rows,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum NodeKind {
-    Leaf(char),
-    Split(Axis, Vec<Node>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Node {
-    /// Region in drawing cells.
-    pub region: Rect,
-    pub kind: NodeKind,
+/// One column or row of the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Track {
+    /// Written size; `None` fills.
+    pub size: Option<Dim>,
+    /// Extent in the drawing: filling tracks share space in proportion to
+    /// it, and it is their minimum size (the drawing is the smallest size).
+    pub weight: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grid {
+    /// Each area in tracks: `x`/`w` count columns, `y`/`h` rows.
     pub areas: BTreeMap<char, Rect>,
-    pub tree: Node,
-    pub width: usize,
-    pub height: usize,
+    pub columns: Vec<Track>,
+    pub rows: Vec<Track>,
 }
 
+/// A layout drawing: each character names an area, and every area must be
+/// a rectangle.
 pub fn analyze(drawing: &[String]) -> Result<Grid, String> {
+    build(drawing, false)
+}
+
+/// A grid layout (§4.1): like [`analyze`], but every drawing cell is a
+/// track of its own, so `- columns` and `- rows` size each one.
+pub fn analyze_grid(drawing: &[String]) -> Result<Grid, String> {
+    build(drawing, true)
+}
+
+fn build(drawing: &[String], every_cell: bool) -> Result<Grid, String> {
     if drawing.is_empty() {
         return Err("layout has no drawing".into());
     }
@@ -69,12 +78,12 @@ pub fn analyze(drawing: &[String]) -> Result<Grid, String> {
     }
     let height = rows.len();
 
-    let mut areas: BTreeMap<char, Rect> = BTreeMap::new();
+    let mut cells: BTreeMap<char, Rect> = BTreeMap::new();
     let mut counts: BTreeMap<char, usize> = BTreeMap::new();
     for (y, row) in rows.iter().enumerate() {
         for (x, &c) in row.iter().enumerate() {
             *counts.entry(c).or_default() += 1;
-            let r = areas.entry(c).or_insert(Rect::new(x, y, 1, 1));
+            let r = cells.entry(c).or_insert(Rect::new(x, y, 1, 1));
             let x0 = r.x.min(x);
             let y0 = r.y.min(y);
             let x1 = (r.x + r.w).max(x + 1);
@@ -82,59 +91,26 @@ pub fn analyze(drawing: &[String]) -> Result<Grid, String> {
             *r = Rect::new(x0, y0, x1 - x0, y1 - y0);
         }
     }
-    for (c, r) in &areas {
+    for (c, r) in &cells {
         if counts[c] != r.w * r.h {
             return Err(format!("area `{c}` is not a rectangle"));
         }
     }
-    let tree = split(Rect::new(0, 0, width, height), &areas)?;
-    Ok(Grid { areas, tree, width, height })
-}
-
-fn split(region: Rect, areas: &BTreeMap<char, Rect>) -> Result<Node, String> {
-    let inside: Vec<(char, Rect)> = areas
+    let cuts = |len: usize, edges: Vec<usize>| -> Vec<usize> {
+        if every_cell { (0..=len).collect() } else { edges.into_iter().chain([0, len]).collect::<BTreeSet<_>>().into_iter().collect() }
+    };
+    let xs = cuts(width, cells.values().flat_map(|r| [r.x, r.x + r.w]).collect());
+    let ys = cuts(height, cells.values().flat_map(|r| [r.y, r.y + r.h]).collect());
+    let at = |cuts: &[usize], v: usize| cuts.iter().position(|&c| c == v).unwrap_or(0);
+    let areas = cells
         .iter()
-        .filter(|(_, r)| r.x >= region.x && r.y >= region.y && r.x + r.w <= region.x + region.w && r.y + r.h <= region.y + region.h)
-        .map(|(c, r)| (*c, *r))
+        .map(|(c, r)| {
+            let (x, y) = (at(&xs, r.x), at(&ys, r.y));
+            (*c, Rect::new(x, y, at(&xs, r.x + r.w) - x, at(&ys, r.y + r.h) - y))
+        })
         .collect();
-    if inside.len() == 1 {
-        return Ok(Node { region, kind: NodeKind::Leaf(inside[0].0) });
-    }
-    for axis in [Axis::Columns, Axis::Rows] {
-        let (start, len) = match axis {
-            Axis::Columns => (region.x, region.w),
-            Axis::Rows => (region.y, region.h),
-        };
-        let cuts: Vec<usize> = (start + 1..start + len)
-            .filter(|&cut| {
-                inside.iter().all(|(_, r)| {
-                    let (a, l) = match axis {
-                        Axis::Columns => (r.x, r.w),
-                        Axis::Rows => (r.y, r.h),
-                    };
-                    !(a < cut && cut < a + l)
-                })
-            })
-            .collect();
-        if cuts.is_empty() {
-            continue;
-        }
-        let mut bounds = vec![start];
-        bounds.extend(cuts);
-        bounds.push(start + len);
-        let children = bounds
-            .windows(2)
-            .map(|w| {
-                let sub = match axis {
-                    Axis::Columns => Rect::new(w[0], region.y, w[1] - w[0], region.h),
-                    Axis::Rows => Rect::new(region.x, w[0], region.w, w[1] - w[0]),
-                };
-                split(sub, areas)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        return Ok(Node { region, kind: NodeKind::Split(axis, children) });
-    }
-    Err("layout cannot be divided into its areas with straight lines".into())
+    let tracks = |cuts: &[usize]| cuts.windows(2).map(|w| Track { size: None, weight: w[1] - w[0] }).collect();
+    Ok(Grid { areas, columns: tracks(&xs), rows: tracks(&ys) })
 }
 
 /// A written size (D 2.4): cells, or a percentage of the window. `*` or a
@@ -177,65 +153,103 @@ impl Dim {
     }
 }
 
+impl fmt::Display for Dim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Dim::Cells(n) => write!(f, "{n}"),
+            Dim::Percent(p) => write!(f, "{p}%"),
+        }
+    }
+}
+
 /// Written sizes of each area: (width, height).
 pub type Dims = BTreeMap<char, (Option<Dim>, Option<Dim>)>;
 
+fn span(r: &Rect, axis: Axis) -> (usize, usize) {
+    match axis {
+        Axis::Columns => (r.x, r.w),
+        Axis::Rows => (r.y, r.h),
+    }
+}
+
 impl Grid {
-    /// Conflicting sizes in the same column or row are an error (D 11.1):
-    /// areas stacked on top of each other must not ask for different
-    /// widths, and areas side by side must not ask for different heights.
-    pub fn check_conflicts(&self, dims: &Dims) -> Result<(), String> {
-        check_node(&self.tree, dims)
-    }
-}
-
-fn dim_of(node: &Node, axis: Axis, dims: &Dims) -> Option<Dim> {
-    match &node.kind {
-        NodeKind::Leaf(c) => dims.get(c).and_then(|d| if axis == Axis::Columns { d.0 } else { d.1 }),
-        NodeKind::Split(a, children) if *a == axis => {
-            let mut sum = 0;
-            for c in children {
-                match dim_of(c, axis, dims)? {
-                    Dim::Cells(n) => sum += n,
-                    Dim::Percent(_) => return None,
-                }
-            }
-            Some(Dim::Cells(sum))
+    pub fn tracks(&self, axis: Axis) -> &[Track] {
+        match axis {
+            Axis::Columns => &self.columns,
+            Axis::Rows => &self.rows,
         }
-        NodeKind::Split(_, _) => None,
+    }
+
+    /// Turns the areas' written sizes (drawing legend) into track sizes.
+    /// An area over several tracks fixes the ones still free, sharing in
+    /// proportion to their drawing extent; sizes that disagree are an error.
+    pub fn set_sizes(&mut self, dims: &Dims) -> Result<(), String> {
+        for axis in [Axis::Columns, Axis::Rows] {
+            let wanted: Vec<(char, usize, usize, Dim)> = dims
+                .iter()
+                .filter_map(|(c, d)| {
+                    let dim = if axis == Axis::Columns { d.0 } else { d.1 }?;
+                    let (from, len) = span(self.areas.get(c)?, axis);
+                    Some((*c, from, len, dim))
+                })
+                .collect();
+            let what = if axis == Axis::Columns { "widths" } else { "heights" };
+            let tracks = match axis {
+                Axis::Columns => &mut self.columns,
+                Axis::Rows => &mut self.rows,
+            };
+            assign(tracks, wanted, what)?;
+        }
+        Ok(())
     }
 }
 
-fn check_node(node: &Node, dims: &Dims) -> Result<(), String> {
-    let NodeKind::Split(axis, children) = &node.kind else { return Ok(()) };
-    let cross = match axis {
-        Axis::Columns => Axis::Rows,
-        Axis::Rows => Axis::Columns,
-    };
-    let given: Vec<(char, Dim)> = children
-        .iter()
-        .filter_map(|c| dim_of(c, cross, dims).map(|d| (first_leaf(c), d)))
-        .collect();
-    if let Some(((a, da), (b, db))) = given.iter().zip(given.iter().skip(1)).find(|(x, y)| x.1 != y.1) {
-        let what = if cross == Axis::Columns { "widths" } else { "heights" };
-        return Err(format!("conflicting {what} for areas `{a}` ({da:?}) and `{b}` ({db:?})"));
+fn assign(tracks: &mut [Track], mut wanted: Vec<(char, usize, usize, Dim)>, what: &str) -> Result<(), String> {
+    let mut owner: Vec<Option<char>> = vec![None; tracks.len()];
+    let free_in = |tracks: &[Track], from: usize, len: usize| tracks[from..from + len].iter().filter(|t| t.size.is_none()).count();
+    while !wanted.is_empty() {
+        // the area with the fewest free tracks first
+        let i = (0..wanted.len()).min_by_key(|&i| free_in(tracks, wanted[i].1, wanted[i].2)).unwrap_or(0);
+        let (c, from, len, dim) = wanted.remove(i);
+        let percent = matches!(dim, Dim::Percent(_));
+        let amount = |d: Dim| match d {
+            Dim::Cells(n) => n,
+            Dim::Percent(p) => p as usize,
+        };
+        let other = (from..from + len).find_map(|t| owner[t]).unwrap_or(c);
+        let conflict = || format!("conflicting {what} for areas `{other}` and `{c}`");
+        let known: Vec<Dim> = tracks[from..from + len].iter().filter_map(|t| t.size).collect();
+        if known.iter().any(|d| matches!(d, Dim::Percent(_)) != percent) {
+            return Err(format!("{} for areas `{other}` and `{c}` mix cells and percentages", what));
+        }
+        let used: usize = known.into_iter().map(amount).sum();
+        let free: Vec<usize> = (from..from + len).filter(|&t| tracks[t].size.is_none()).collect();
+        if free.is_empty() {
+            if used != amount(dim) {
+                return Err(conflict());
+            }
+            continue;
+        }
+        let rest = amount(dim).checked_sub(used).filter(|&r| r > 0).ok_or_else(conflict)?;
+        let weight: usize = free.iter().map(|&t| tracks[t].weight).sum();
+        let mut left = rest;
+        for (k, &t) in free.iter().enumerate() {
+            let share = if k + 1 == free.len() { left } else { rest * tracks[t].weight / weight.max(1) };
+            if share == 0 {
+                return Err(format!("area `{c}` ({dim}) is too small to share among its {} free tracks", free.len()));
+            }
+            left -= share;
+            tracks[t].size = Some(if percent { Dim::Percent(share.min(100) as u8) } else { Dim::Cells(share) });
+            owner[t] = Some(c);
+        }
     }
-    children.iter().try_for_each(|c| check_node(c, dims))
+    Ok(())
 }
 
-fn first_leaf(node: &Node) -> char {
-    match &node.kind {
-        NodeKind::Leaf(c) => *c,
-        NodeKind::Split(_, children) => first_leaf(&children[0]),
-    }
-}
-
-/// Size constraints of one area, in cells.
+/// The content's minimum size of one area, in cells (e.g. a panel drawing
+/// and its border).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AreaSize {
-    pub width: Option<usize>,
-    pub height: Option<usize>,
-    /// Minimum size of the content (e.g. a panel drawing).
     pub min_width: usize,
     pub min_height: usize,
 }
@@ -249,127 +263,104 @@ pub struct Solved {
 }
 
 impl Grid {
-    pub fn min_size(&self, sizes: &BTreeMap<char, AreaSize>) -> (usize, usize) {
-        (min_of(&self.tree, Axis::Columns, sizes), min_of(&self.tree, Axis::Rows, sizes))
+    pub fn min_size(&self, sizes: &BTreeMap<char, AreaSize>, width: usize, height: usize) -> (usize, usize) {
+        (self.mins(Axis::Columns, sizes, width).iter().sum(), self.mins(Axis::Rows, sizes, height).iter().sum())
     }
 
     pub fn solve(&self, sizes: &BTreeMap<char, AreaSize>, width: usize, height: usize) -> Solved {
-        let (min_width, min_height) = self.min_size(sizes);
-        let mut rects = BTreeMap::new();
-        distribute(&self.tree, Rect::new(0, 0, width, height), sizes, &mut rects);
+        let (min_width, min_height) = self.min_size(sizes, width, height);
+        let cols = self.lengths(Axis::Columns, sizes, width);
+        let rows = self.lengths(Axis::Rows, sizes, height);
+        let place = |lens: &[usize], from: usize, len: usize| (lens[..from].iter().sum::<usize>(), lens[from..from + len].iter().sum::<usize>());
+        let rects = self
+            .areas
+            .iter()
+            .map(|(c, r)| {
+                let (x, w) = place(&cols, r.x, r.w);
+                let (y, h) = place(&rows, r.y, r.h);
+                (*c, Rect::new(x, y, w, h))
+            })
+            .collect();
         Solved { rects, too_small: width < min_width || height < min_height, min_width, min_height }
     }
-}
 
-fn leaf_fixed(c: char, axis: Axis, sizes: &BTreeMap<char, AreaSize>) -> Option<usize> {
-    let s = sizes.get(&c)?;
-    match axis {
-        Axis::Columns => s.width,
-        Axis::Rows => s.height,
-    }
-}
-
-fn span(node: &Node, axis: Axis) -> usize {
-    match axis {
-        Axis::Columns => node.region.w,
-        Axis::Rows => node.region.h,
-    }
-}
-
-fn min_of(node: &Node, axis: Axis, sizes: &BTreeMap<char, AreaSize>) -> usize {
-    match &node.kind {
-        NodeKind::Leaf(c) => leaf_fixed(*c, axis, sizes).unwrap_or_else(|| {
-            let content = sizes.get(c).map(|s| match axis {
-                Axis::Columns => s.min_width,
-                Axis::Rows => s.min_height,
-            });
-            content.unwrap_or(0).max(span(node, axis))
-        }),
-        NodeKind::Split(a, children) if *a == axis => children.iter().map(|c| min_of(c, axis, sizes)).sum(),
-        NodeKind::Split(_, children) => children.iter().map(|c| min_of(c, axis, sizes)).max().unwrap_or(0),
-    }
-}
-
-fn fixed_of(node: &Node, axis: Axis, sizes: &BTreeMap<char, AreaSize>) -> Option<usize> {
-    match &node.kind {
-        NodeKind::Leaf(c) => leaf_fixed(*c, axis, sizes),
-        NodeKind::Split(a, children) if *a == axis => {
-            children.iter().map(|c| fixed_of(c, axis, sizes)).sum::<Option<usize>>()
+    /// Minimum length of each track: a sized track is its size; a filling
+    /// track its drawing extent, grown to fit the contents of the areas on
+    /// it (an area over several tracks grows the last filling one).
+    fn mins(&self, axis: Axis, sizes: &BTreeMap<char, AreaSize>, total: usize) -> Vec<usize> {
+        let tracks = self.tracks(axis);
+        let mut mins: Vec<usize> = tracks.iter().map(|t| t.size.map_or(t.weight, |d| d.resolve(total))).collect();
+        let mut needs: Vec<(usize, usize, usize)> = self
+            .areas
+            .iter()
+            .map(|(c, r)| {
+                let (from, len) = span(r, axis);
+                let s = sizes.get(c).copied().unwrap_or_default();
+                (from, len, if axis == Axis::Columns { s.min_width } else { s.min_height })
+            })
+            .collect();
+        needs.sort_by_key(|n| n.1);
+        for (from, len, need) in needs {
+            let have: usize = mins[from..from + len].iter().sum();
+            if have < need
+                && let Some(t) = (from..from + len).rev().find(|&t| tracks[t].size.is_none()) {
+                    mins[t] += need - have;
+                }
         }
-        NodeKind::Split(_, children) => children.iter().filter_map(|c| fixed_of(c, axis, sizes)).max(),
+        mins
     }
-}
 
-fn distribute(node: &Node, rect: Rect, sizes: &BTreeMap<char, AreaSize>, out: &mut BTreeMap<char, Rect>) {
-    let (axis, children) = match &node.kind {
-        NodeKind::Leaf(c) => {
-            out.insert(*c, rect);
-            return;
-        }
-        NodeKind::Split(axis, children) => (*axis, children),
-    };
-    let total = match axis {
-        Axis::Columns => rect.w,
-        Axis::Rows => rect.h,
-    };
-    let fixed: Vec<Option<usize>> = children.iter().map(|c| fixed_of(c, axis, sizes)).collect();
-    let mut lens: Vec<usize> = fixed.iter().map(|f| f.unwrap_or(0)).collect();
-    let flex: Vec<usize> = (0..children.len()).filter(|&i| fixed[i].is_none()).collect();
-    let used: usize = lens.iter().sum();
-    let remaining = total.saturating_sub(used);
-    // Water-filling: share in proportion to drawing extent; a child whose
-    // share would fall below its minimum is pinned to the minimum and the
-    // others share the rest.
-    let mins: Vec<usize> = children.iter().map(|c| min_of(c, axis, sizes)).collect();
-    let mut pinned = vec![false; children.len()];
-    loop {
-        let rest = remaining.saturating_sub(flex.iter().filter(|&&i| pinned[i]).map(|&i| mins[i]).sum());
-        let free: Vec<usize> = flex.iter().copied().filter(|&i| !pinned[i]).collect();
-        let weight: usize = free.iter().map(|&i| span(&children[i], axis)).sum();
-        let mut changed = false;
-        for &i in &free {
-            let share = rest * span(&children[i], axis) / weight.max(1);
-            if share < mins[i] {
-                pinned[i] = true;
-                changed = true;
+    fn lengths(&self, axis: Axis, sizes: &BTreeMap<char, AreaSize>, total: usize) -> Vec<usize> {
+        let tracks = self.tracks(axis);
+        let mins = self.mins(axis, sizes, total);
+        let mut lens: Vec<usize> = tracks.iter().map(|t| t.size.map_or(0, |d| d.resolve(total))).collect();
+        let flex: Vec<usize> = (0..tracks.len()).filter(|&i| tracks[i].size.is_none()).collect();
+        let remaining = total.saturating_sub(lens.iter().sum());
+        // Water-filling: share in proportion to drawing extent; a track
+        // whose share would fall below its minimum is pinned to the minimum
+        // and the others share the rest.
+        let mut pinned = vec![false; tracks.len()];
+        loop {
+            let rest = remaining.saturating_sub(flex.iter().filter(|&&i| pinned[i]).map(|&i| mins[i]).sum());
+            let free: Vec<usize> = flex.iter().copied().filter(|&i| !pinned[i]).collect();
+            let weight: usize = free.iter().map(|&i| tracks[i].weight).sum();
+            let mut changed = false;
+            for &i in &free {
+                let share = rest * tracks[i].weight / weight.max(1);
+                if share < mins[i] {
+                    pinned[i] = true;
+                    changed = true;
+                }
+                lens[i] = share;
             }
-            lens[i] = share;
-        }
-        if !changed {
-            break;
-        }
-    }
-    for &i in &flex {
-        if pinned[i] {
-            lens[i] = mins[i];
-        }
-    }
-    // Make the lengths add up to `total`: extra goes to the last flexible
-    // child; a shortage is taken from the end.
-    let sum: usize = lens.iter().sum();
-    if sum < total {
-        let i = flex.last().copied().unwrap_or(children.len() - 1);
-        lens[i] += total - sum;
-    } else if sum > total {
-        let mut excess = sum - total;
-        let order: Vec<usize> = flex.iter().rev().copied().chain((0..children.len()).rev()).collect();
-        for i in order {
-            let take = excess.min(lens[i]);
-            lens[i] -= take;
-            excess -= take;
-            if excess == 0 {
+            if !changed {
                 break;
             }
         }
-    }
-    let mut pos = 0;
-    for (child, len) in children.iter().zip(lens) {
-        let r = match axis {
-            Axis::Columns => Rect::new(rect.x + pos, rect.y, len, rect.h),
-            Axis::Rows => Rect::new(rect.x, rect.y + pos, rect.w, len),
-        };
-        distribute(child, r, sizes, out);
-        pos += len;
+        for &i in &flex {
+            if pinned[i] {
+                lens[i] = mins[i];
+            }
+        }
+        // Make the lengths add up to `total`: extra goes to the last filling
+        // track; a shortage is taken from the end.
+        let sum: usize = lens.iter().sum();
+        if sum < total {
+            let i = flex.last().copied().unwrap_or(tracks.len() - 1);
+            lens[i] += total - sum;
+        } else if sum > total {
+            let mut excess = sum - total;
+            let order: Vec<usize> = flex.iter().rev().copied().chain((0..tracks.len()).rev()).collect();
+            for i in order {
+                let take = excess.min(lens[i]);
+                lens[i] -= take;
+                excess -= take;
+                if excess == 0 {
+                    break;
+                }
+            }
+        }
+        lens
     }
 }
 
@@ -422,19 +413,33 @@ mod tests {
         lines.iter().map(|s| s.to_string()).collect()
     }
 
-    fn sizes(list: &[(char, Option<usize>, Option<usize>)]) -> BTreeMap<char, AreaSize> {
-        list.iter().map(|(c, w, h)| (*c, AreaSize { width: *w, height: *h, ..Default::default() })).collect()
+    /// A drawing with the written sizes of its areas.
+    fn sized(lines: &[&str], list: &[(char, Option<usize>, Option<usize>)]) -> Grid {
+        let mut g = analyze(&d(lines)).unwrap();
+        let dims = list.iter().map(|(c, w, h)| (*c, (w.map(Dim::Cells), h.map(Dim::Cells)))).collect();
+        g.set_sizes(&dims).unwrap();
+        g
+    }
+
+    fn track(size: Option<Dim>, weight: usize) -> Track {
+        Track { size, weight }
     }
 
     #[test]
-    fn spec_example_areas() {
+    fn spec_example_tracks() {
         let g = analyze(&d(&["sssmm", "sssmm", "lllll"])).unwrap();
-        assert_eq!(g.areas[&'s'], Rect::new(0, 0, 3, 2));
-        assert_eq!(g.areas[&'m'], Rect::new(3, 0, 2, 2));
-        assert_eq!(g.areas[&'l'], Rect::new(0, 2, 5, 1));
-        let NodeKind::Split(Axis::Rows, ch) = &g.tree.kind else { panic!("{:?}", g.tree) };
-        assert_eq!(ch.len(), 2);
-        assert!(matches!(&ch[0].kind, NodeKind::Split(Axis::Columns, c) if c.len() == 2));
+        assert_eq!(g.areas[&'s'], Rect::new(0, 0, 1, 1));
+        assert_eq!(g.areas[&'m'], Rect::new(1, 0, 1, 1));
+        assert_eq!(g.areas[&'l'], Rect::new(0, 1, 2, 1));
+        assert_eq!(g.columns, [track(None, 3), track(None, 2)]);
+        assert_eq!(g.rows, [track(None, 2), track(None, 1)]);
+    }
+
+    #[test]
+    fn grid_form_has_a_track_per_cell() {
+        let g = analyze_grid(&d(&["AA", "BB"])).unwrap();
+        assert_eq!(g.columns.len(), 2, "no area edge between the columns, still two tracks");
+        assert_eq!(g.areas[&'A'], Rect::new(0, 0, 2, 1));
     }
 
     #[test]
@@ -446,10 +451,13 @@ mod tests {
     }
 
     #[test]
-    fn pinwheel_is_not_guillotine() {
+    fn pinwheel_needs_no_straight_cuts() {
         // Four areas around a centre: no straight cut separates them.
-        let e = analyze(&d(&["aab", "dcb", "dee"])).unwrap_err();
-        assert!(e.contains("straight lines"), "{e}");
+        let g = analyze(&d(&["aab", "dcb", "dee"])).unwrap();
+        let r = g.solve(&BTreeMap::new(), 30, 9);
+        assert_eq!(r.rects[&'c'], Rect::new(10, 3, 10, 3));
+        assert_eq!(r.rects[&'a'], Rect::new(0, 0, 20, 3));
+        assert_eq!(r.rects[&'b'], Rect::new(20, 0, 10, 6));
     }
 
     #[test]
@@ -461,9 +469,8 @@ mod tests {
 
     #[test]
     fn solve_spec_example() {
-        let g = analyze(&d(&["sssmm", "sssmm", "lllll"])).unwrap();
-        let s = sizes(&[('s', Some(30), None), ('l', None, Some(6))]);
-        let r = g.solve(&s, 100, 30);
+        let g = sized(&["sssmm", "sssmm", "lllll"], &[('s', Some(30), None), ('l', None, Some(6))]);
+        let r = g.solve(&BTreeMap::new(), 100, 30);
         assert!(!r.too_small);
         assert_eq!(r.rects[&'s'], Rect::new(0, 0, 30, 24));
         assert_eq!(r.rects[&'m'], Rect::new(30, 0, 70, 24));
@@ -489,8 +496,8 @@ mod tests {
 
     #[test]
     fn all_fixed_extra_space_goes_to_last() {
-        let g = analyze(&d(&["ab"])).unwrap();
-        let r = g.solve(&sizes(&[('a', Some(10), None), ('b', Some(10), None)]), 25, 1);
+        let g = sized(&["ab"], &[('a', Some(10), None), ('b', Some(10), None)]);
+        let r = g.solve(&BTreeMap::new(), 25, 1);
         assert_eq!(r.rects[&'b'].w, 15);
     }
 
@@ -507,9 +514,8 @@ mod tests {
 
     #[test]
     fn too_small_terminal_flagged_and_clipped() {
-        let g = analyze(&d(&["sssmm", "lllll"])).unwrap();
-        let s = sizes(&[('s', Some(30), None), ('l', None, Some(6))]);
-        let r = g.solve(&s, 20, 5);
+        let g = sized(&["sssmm", "lllll"], &[('s', Some(30), None), ('l', None, Some(6))]);
+        let r = g.solve(&BTreeMap::new(), 20, 5);
         assert!(r.too_small);
         assert_eq!(r.min_width, 32);
         assert_eq!(r.min_height, 7);
@@ -538,10 +544,38 @@ mod tests {
         let mut dims = Dims::new();
         dims.insert('s', (Some(Dim::Cells(20)), None));
         dims.insert('i', (Some(Dim::Cells(20)), Some(Dim::Cells(10))));
-        assert!(g.check_conflicts(&dims).is_ok());
+        assert!(g.clone().set_sizes(&dims).is_ok());
         dims.insert('i', (Some(Dim::Cells(25)), None));
-        let e = g.check_conflicts(&dims).unwrap_err();
-        assert!(e.contains("conflicting widths for areas `s`"), "{e}");
+        let e = g.clone().set_sizes(&dims).unwrap_err();
+        assert!(e.contains("conflicting widths for areas `i` and `s`"), "{e}");
+        dims.insert('i', (Some(Dim::Percent(25)), None));
+        assert!(g.clone().set_sizes(&dims).unwrap_err().contains("mix cells and percentages"));
+    }
+
+    #[test]
+    fn a_size_over_several_tracks_fills_the_free_ones() {
+        // `t` is 40 wide over both columns; `a` fixes the first to 10
+        let g = sized(&["ab", "tt"], &[('a', Some(10), None), ('t', Some(40), None)]);
+        assert_eq!(g.columns, [track(Some(Dim::Cells(10)), 1), track(Some(Dim::Cells(30)), 1)]);
+        // with no other sizes it is shared by drawing extent
+        let g = sized(&["aaab", "tttt"], &[('t', Some(40), None)]);
+        assert_eq!(g.columns, [track(Some(Dim::Cells(30)), 3), track(Some(Dim::Cells(10)), 1)]);
+    }
+
+    #[test]
+    fn edges_that_line_up_in_the_drawing_stay_lined_up() {
+        // `b` needs 30 columns: the column grows, and `d` under it too
+        let g = analyze(&d(&["ab", "cd"])).unwrap();
+        let mut s = BTreeMap::new();
+        s.insert('b', AreaSize { min_width: 30, ..Default::default() });
+        let r = g.solve(&s, 40, 4);
+        assert_eq!((r.rects[&'b'].x, r.rects[&'d'].x), (10, 10));
+        // an area over a sized and a filling column ends where they end
+        let mut g = analyze_grid(&d(&["AB", "CC"])).unwrap();
+        g.columns[0].size = Some(Dim::Cells(30));
+        let r = g.solve(&BTreeMap::new(), 100, 4);
+        assert_eq!(r.rects[&'B'], Rect::new(30, 0, 70, 2));
+        assert_eq!(r.rects[&'C'], Rect::new(0, 2, 100, 2));
     }
 
     #[test]

@@ -715,7 +715,7 @@ impl Engine {
         let Some(base) = &self.layout else { return vec![] };
         let (w, h) = self.size;
         let Some(def) = self.model.choose_layout(base, w, h) else { return vec![] };
-        let solved = def.grid.solve(&self.model.area_sizes(def, w, h), w, h);
+        let solved = def.grid.solve(&self.model.area_sizes(def), w, h);
         let mut areas: Vec<(Rect, String)> =
             def.areas.iter().map(|(c, a)| (solved.rects.get(c).copied().unwrap_or_default(), a.target.clone())).collect();
         areas.sort_by_key(|(r, _)| (r.y, r.x));
@@ -2286,7 +2286,7 @@ impl Engine {
         self.hits.clear();
         if let Some(base) = self.layout.clone()
             && let Some(def) = self.model.choose_layout(&base, w, h).cloned() {
-                let solved = def.grid.solve(&self.model.area_sizes(&def, w, h), w, h);
+                let solved = def.grid.solve(&self.model.area_sizes(&def), w, h);
                 if solved.too_small {
                     let mut extra = BTreeMap::new();
                     extra.insert("WIDTH".to_string(), solved.min_width.to_string());
