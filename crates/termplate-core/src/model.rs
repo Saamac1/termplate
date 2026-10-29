@@ -77,7 +77,8 @@ pub enum Action {
     Focus(usize),
     /// Cursor movement and `select` (keys only).
     Nav(String),
-    Open { target: String, args: Vec<Arg> },
+    /// `open X`; with `stack` a new layer even when X is already open.
+    Open { target: String, args: Vec<Arg>, stack: bool },
     Set { var: String, value: Expr },
     Toggle(String),
     /// Shows or hides a layout panel (D 11.3 `toggle PANEL`).
@@ -1299,6 +1300,10 @@ fn parse_action(bld: &mut Builder, item: &RawItem, from: usize, to: usize) -> Op
     };
     let action = match first.text.as_str() {
         "open" => {
+            // `open X stack`: a new layer even when X is already open
+            let stack = t.len() > 2 && t[t.len() - 1].is("stack");
+            let to = if stack { to - 1 } else { to };
+            let t = &item.tokens[from..to];
             let (name, args) = match split_call(item.span(from + 1, to)) {
                 Ok(x) => x,
                 Err(e) => {
@@ -1307,13 +1312,13 @@ fn parse_action(bld: &mut Builder, item: &RawItem, from: usize, to: usize) -> Op
                 }
             };
             if name.is_empty() || (args.is_none() && t.len() != 2) {
-                bld.err(item.err("`open NAME` or `open NAME(arguments)`"));
+                bld.err(item.err("`open NAME [stack]` or `open NAME(arguments) [stack]`"));
                 return None;
             }
             let target = bld.resolve(item, name, &["menu", "panel", "input", "layout"])?;
             let args = args.map(|a| parse_args(bld, item, a)).unwrap_or_default();
             check_args(bld, item, &target, &args);
-            Action::Open { target, args }
+            Action::Open { target, args, stack }
         }
         "set" => {
             let var = t.get(1)?.text.clone();
@@ -1879,13 +1884,15 @@ fn build_keys(bld: &mut Builder, b: &RawBlock, keymap: &mut Keymap) {
             let Some(n) = parse_focus(bld, item, &t[1].text) else { continue };
             (format!("focus {n}"), 2)
         } else if t.len() >= 2 && (t[0].is("open") || t[0].is("toggle")) {
-            let name = match parse_action(bld, item, 0, 2) {
-                Some(Action::Open { target, .. }) => format!("open {target}"),
+            let n = if t[0].is("open") && t.get(2).is_some_and(|w| w.is("stack")) { 3 } else { 2 };
+            let name = match parse_action(bld, item, 0, n) {
+                Some(Action::Open { target, stack: false, .. }) => format!("open {target}"),
+                Some(Action::Open { target, stack: true, .. }) => format!("open {target} stack"),
                 Some(Action::Toggle(v)) => format!("toggle {v}"),
                 Some(Action::TogglePanel(p)) => format!("toggle {p}"),
                 _ => continue,
             };
-            (name, 2)
+            (name, n)
         } else {
             let word = action_alias(item.key());
             if KEY_ACTIONS.contains(&word) {

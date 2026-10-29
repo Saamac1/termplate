@@ -318,6 +318,27 @@ fn opening_an_open_screen_returns_to_it() {
 }
 
 #[test]
+fn open_stack_adds_a_layer_even_when_open() {
+    let src = "app T\n- termplate 0.1\n\nmenu DIR\n- DEEPER open DIR stack\n- UP back\n\nkeys MENU\n- open DIR stack ctrl+d\n";
+    let mut host = TestHost::new();
+    let mut e = Engine::new(model_of(src), Mode::Widget);
+    e.set_size(60, 20);
+    e.start_widget(&mut host, "DIR").unwrap();
+    // two layers from the item, one from the key: four DIRs
+    key(&mut e, &mut host, KeyCode::Enter);
+    key(&mut e, &mut host, KeyCode::Enter);
+    e.handle(&mut host, ctrl('d'));
+    for _ in 0..3 {
+        assert_eq!(e.top().as_deref(), Some("DIR"));
+        key(&mut e, &mut host, KeyCode::Esc);
+        assert!(e.take_effects().is_empty(), "back closed one layer, not the program");
+    }
+    assert_eq!(e.top().as_deref(), Some("DIR"), "the first one is left");
+    key(&mut e, &mut host, KeyCode::Esc);
+    assert!(matches!(e.take_effects()[..], [Effect::Exit { code: 1, .. }]));
+}
+
+#[test]
 fn modal_menu_text_wraps() {
     let src = "app T\n- termplate 0.1\n- language en\n\nmenu M\n- OK quit\n\ntext en\nM.TEXT This text is longer than a menu box may grow, so it wraps between its words onto the next lines.\n";
     let mut host = TestHost::new();
@@ -508,7 +529,7 @@ fn toggle_panel_hides_its_area() {
 #[test]
 fn multi_line_panel_field_wraps_and_cuts() {
     let (mut e, mut h) = app();
-    e.perform(&mut h, &Action::Open { target: "HELP".into(), args: vec![] }, None);
+    e.perform(&mut h, &Action::Open { target: "HELP".into(), args: vec![], stack: false }, None);
     let s = screen(&mut e);
     assert!(s.contains("one two"), "{s}");
     assert!(s.contains("three …") || s.contains("three four …") || s.contains("…"), "{s}");
@@ -878,7 +899,7 @@ fn hover_highlights_and_wheel_scrolls() {
 #[test]
 fn click_on_modal_panel_confirms() {
     let (mut e, mut h) = app();
-    e.perform(&mut h, &Action::Open { target: "HELP".into(), args: vec![] }, None);
+    e.perform(&mut h, &Action::Open { target: "HELP".into(), args: vec![], stack: false }, None);
     e.render();
     e.handle(&mut h, InputEvent::click(30, 6));
     assert_eq!(e.top(), None);
@@ -983,7 +1004,7 @@ fn row_values_fill_the_row_text_key() {
     e.start_app(&mut h).unwrap();
     e.set_var("FILES", Value::List(vec!["a.log".into()]));
     let dir = Expr::bare("\"/var/log\"");
-    e.perform(&mut h, &Action::Open { target: "SIZES".into(), args: vec![(None, dir)] }, None);
+    e.perform(&mut h, &Action::Open { target: "SIZES".into(), args: vec![(None, dir)], stack: false }, None);
     assert!(screen(&mut e).contains("a.log in /var/log"), "menu parameter and ROW text");
 }
 

@@ -307,3 +307,18 @@ key ctrl+q
     }
     assert!(!conf.contains("secret") && !conf.contains("account = none"), "the password came on stdin and was hashed: {conf}");
 }
+
+#[test]
+fn open_stack_drills_down_and_back() {
+    let d = tmpdir("drill");
+    std::fs::create_dir_all(d.join("a/b/c")).unwrap();
+    let app = write(
+        &d,
+        "drill.termplate",
+        "app DRILL\n- termplate 0.1\n- layout MAIN\n\nlayout MAIN grid\nMAIN_MENU\n\nmenu MAIN_MENU\n- GO open DIR(\"a\")\n- QUIT quit\n\nmenu DIR(path) list\n- source $(ls -d \"$path\"/*/ | sed 's:/$::')\n- keep\n- then open DIR($it) stack\n",
+    );
+    // each level keeps its own rows and argument when the one above closes
+    let steps = "key enter\nwait\nexpect a/b\nkey enter\nwait\nexpect a/b/c\nkey esc\nreject a/b/c\nexpect a/b\nkey esc\nreject a/b\nexpect MAIN_MENU.GO\nkey ctrl+q\n";
+    let (code, out, err) = render(&d, &["run", &app], steps);
+    assert_eq!((code, out.as_str()), (0, "--- exit 0\n"), "{err}");
+}

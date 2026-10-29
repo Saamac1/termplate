@@ -277,7 +277,7 @@ fn spec_command_example() {
     assert_eq!(c.run.as_deref(), Some("./backup.sh"));
     assert_eq!(c.env.iter().map(|(k, e)| format!("{k}={}", e.src)).collect::<Vec<_>>(), ["TARGET=$TARGET", "VERBOSE=$VERBOSE"]);
     assert_eq!(c.output.as_deref(), Some("LOG"));
-    assert_eq!(c.then, Some(Action::Open { target: "DONE".into(), args: vec![] }));
+    assert_eq!(c.then, Some(Action::Open { target: "DONE".into(), args: vec![], stack: false }));
     assert_eq!(c.secrets, [("PASS".to_string(), SecretMode::Stdin)]);
 }
 
@@ -292,7 +292,7 @@ fn command_run_interactive_and_chains() {
 #[test]
 fn open_with_rlml_arguments() {
     let m = ok(&format!("{CMD}command C\n- run true\n- then open DONE(file: $TARGET)\n"));
-    let Some(Action::Open { target, args }) = &m.commands["C"].then else { panic!() };
+    let Some(Action::Open { target, args, .. }) = &m.commands["C"].then else { panic!() };
     assert_eq!(target, "DONE");
     assert_eq!(args[0].0.as_deref(), Some("file"));
     assert_eq!(args[0].1.src, "$TARGET");
@@ -434,7 +434,7 @@ fn spec_menu_example() {
     let MenuKind::Static(items) = &m.menus["MAIN_MENU"].kind else { panic!() };
     assert_eq!(items[0].action, Action::Command("BACKUP".into()));
     assert_eq!(items[1].disabled_when.as_ref().unwrap().src, "not ok $(test -d $TARGET)");
-    assert_eq!(items[2].action, Action::Open { target: "SETTINGS".into(), args: vec![] });
+    assert_eq!(items[2].action, Action::Open { target: "SETTINGS".into(), args: vec![], stack: false });
     assert_eq!(items[3].action, Action::Quit);
     assert_eq!(m.menus["SETTINGS"].context(), "POPUP");
     assert_eq!(m.menus["MAIN_MENU"].context(), "MENU");
@@ -665,9 +665,9 @@ fn namespaces_resolve_references() {
     assert!(m.menus.contains_key("TOOLS.MAIN") && m.menus.contains_key("MAIN"));
     let MenuKind::Static(items) = &m.menus["TOOLS.MAIN"].kind else { panic!() };
     assert_eq!(items[0].action, Action::Command("TOOLS.RUN".into()));
-    assert_eq!(items[1].action, Action::Open { target: "ROOT_MENU".into(), args: vec![] });
+    assert_eq!(items[1].action, Action::Open { target: "ROOT_MENU".into(), args: vec![], stack: false });
     let MenuKind::Static(items) = &m.menus["ROOT_MENU"].kind else { panic!() };
-    assert_eq!(items[0].action, Action::Open { target: "TOOLS.MAIN".into(), args: vec![] });
+    assert_eq!(items[0].action, Action::Open { target: "TOOLS.MAIN".into(), args: vec![], stack: false });
 }
 
 #[test]
@@ -699,4 +699,15 @@ fn borders_in_panel_drawings_warn() {
     let w: Vec<&LoadError> = m.warnings.iter().filter(|w| w.message.contains("own border")).collect();
     assert_eq!(w.len(), 1, "{:?}", m.warnings);
     assert!(w[0].message.contains("panel P"));
+}
+
+#[test]
+fn open_stack_modifier() {
+    let m = ok("menu A\n- ONE open B stack\n- TWO open B\n\nmenu B\n- QUIT\n\ncommand C\n- run true\n- then open B stack\n\nkeys MENU\n- open B stack ctrl+b\n");
+    let MenuKind::Static(items) = &m.menus["A"].kind else { panic!() };
+    assert_eq!(items[0].action, Action::Open { target: "B".into(), args: vec![], stack: true });
+    assert_eq!(items[1].action, Action::Open { target: "B".into(), args: vec![], stack: false });
+    assert_eq!(m.commands["C"].then, Some(Action::Open { target: "B".into(), args: vec![], stack: true }));
+    assert!(err("menu A\n- ONE open stack\n").contains("unknown menu or panel or input or layout `stack`")
+        || err("menu A\n- ONE open stack\n").contains("open NAME"));
 }

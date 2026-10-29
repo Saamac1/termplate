@@ -203,7 +203,9 @@ command BACKUP
 - `confirm AVAIN` kysyy vahvistuksen ennen ajoa. Tekstissä `{IT}` on valittu rivi tai rivit.
 - `then` ja `on_error` valitsevat jatkon paluuarvon mukaan.
 - **Sisäiset toiminnot** (pienellä): `quit`, `back`, `close`, `open`, `set MUUTTUJA ARVO`, `toggle MUUTTUJA`, `refresh`, `next_area`, `prev_area`, `focus N`, `stop KOMENTO` (keskeyttää käynnissä olevan komennon, luku 15), `emit TAPAHTUMA` (koprosessille, luku 14).
-- **`open` jo avoimeen:** jos avattava valikko, paneeli tai syöte on jo pinossa, sen päällä olevat suljetaan ja se avataan uudelleen samalle paikalle. Näin velhon Takaisin-kohta (`- BACK open EDELLINEN`) ja edellisen sivun `then open SEURAAVA` eivät kasvata pinoa. `back` sulkee edelleen vain päällimmäisen.
+- **`open` jo avoimeen:** jos avattava valikko, paneeli tai syöte on jo pinossa, sen päällä olevat suljetaan ja se avataan uudelleen samalle paikalle. Näin velhon Takaisin-kohta (`- BACK open EDELLINEN`) ja edellisen sivun `then open SEURAAVA` eivät kasvata pinoa.
+- **`open NIMI stack`** avaa aina uuden kerroksen, vaikka sama valikko, paneeli tai syöte olisi jo auki, esimerkiksi kun samaa listavalikkoa porataan syvemmälle (`- then open DIR($it) stack`, listassa `keep`, jotta se jää pinoon valinnan jälkeen). Jokainen kerros säilyttää omat argumenttinsa, rivinsä ja kursorinsa, ja alempi kerros palaa ennalleen, kun ylempi suljetaan. Määre käy kohdassa, `then`- ja `on_error`-rivillä ja näppäinrivillä (`- open DIR stack ctrl+d`); näppäinsidonta ei silloin sulje avaamaansa valikkoa vaan lisää aina kerroksen.
+- `back` sulkee kummassakin tapauksessa vain päällimmäisen.
 - **Paluuarvo ja ketjut:** `- into MUUTTUJA` tallentaa komennon stdoutin muuttujaan. Komento voi ajaa toisen komennon (`then KOMENTO`), kuten RLML:n komentoketjut.
 
 #### 6.1 Upotetut skriptit

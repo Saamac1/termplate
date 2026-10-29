@@ -199,6 +199,23 @@ pub struct Engine {
     form_field: BTreeMap<String, usize>,
     /// A form's validation message.
     form_error: BTreeMap<String, String>,
+    /// Screens that `open … stack` covered with another layer of
+    /// themselves, restored when that layer closes.
+    covered: Vec<Covered>,
+}
+
+/// The state of a screen under another layer of itself (spec §6).
+#[derive(Debug, Clone)]
+struct Covered {
+    /// Stack position of the layer on top of it.
+    depth: usize,
+    name: String,
+    menu: Option<MenuState>,
+    params: Option<BTreeMap<String, String>>,
+    input: Option<InputState>,
+    panel_values: Option<BTreeMap<String, String>>,
+    form_field: Option<usize>,
+    form_error: Option<String>,
 }
 
 fn complete_menu() -> crate::model::MenuDef {
@@ -334,6 +351,7 @@ impl Engine {
             loaded: BTreeSet::new(),
             form_field: BTreeMap::new(),
             form_error: BTreeMap::new(),
+            covered: Vec::new(),
         }
     }
 
@@ -368,7 +386,7 @@ impl Engine {
     /// (D 11.2); the widget then ends with status 1.
     pub fn start_widget(&mut self, host: &mut dyn Host, target: &str) -> Result<(), String> {
         self.run_start(host);
-        if !self.open(host, target, BTreeMap::new())? {
+        if !self.open(host, target, BTreeMap::new(), false)? {
             self.effects.push(Effect::Exit { code: 1, output: None });
         }
         Ok(())
@@ -530,7 +548,7 @@ impl Engine {
     pub fn apply(&mut self, host: &mut dyn Host, msg: HostMsg) -> Result<(), String> {
         let r = match msg {
             HostMsg::Set { name, value } => self.set_var_text(&name, &value),
-            HostMsg::Open(name) => self.open(host, &name, BTreeMap::new()).map(|_| ()),
+            HostMsg::Open(name) => self.open(host, &name, BTreeMap::new(), false).map(|_| ()),
             HostMsg::Close(None) => {
                 self.close_top(true);
                 Ok(())
@@ -1080,8 +1098,26 @@ impl Engine {
 
     /// Opens a menu, input, panel or layout. Returns false when an empty
     /// list menu without `<MENU>.EMPTY` was not opened.
-    fn open(&mut self, host: &mut dyn Host, target: &str, params: BTreeMap<String, String>) -> Result<bool, String> {
-        self.return_to(target);
+    /// Opening a screen that is already open returns to it, unless `stack`
+    /// asks for a new layer on top (spec §6).
+    fn open(&mut self, host: &mut dyn Host, target: &str, params: BTreeMap<String, String>, stack: bool) -> Result<bool, String> {
+        if !stack {
+            self.return_to(target);
+        } else if self.screens.iter().any(|s| matches!(s, Screen::Menu(n) | Screen::Panel(n) | Screen::Input(n) if n == target)) {
+            let name = target.to_string();
+            self.covered.push(Covered {
+                depth: self.screens.len(),
+                menu: self.menus.get(&name).cloned(),
+                params: self.params.get(&name).cloned(),
+                input: self.inputs.get(&name).cloned(),
+                panel_values: self.panel_values.get(&name).cloned(),
+                form_field: self.form_field.get(&name).copied(),
+                form_error: self.form_error.get(&name).cloned(),
+                name,
+            });
+        }
+        // a result still on its way belongs to what was there before
+        self.evals.retain(|_, n| n != target);
         if self.model.menus.contains_key(target) {
             self.params.insert(target.to_string(), params);
             self.menus.insert(target.to_string(), MenuState::default());
@@ -1114,9 +1150,8 @@ impl Engine {
         Ok(true)
     }
 
-    /// Opening a screen that is already open returns to it (spec §6): the
-    /// screens above it close and it opens afresh in its place, so a wizard
-    /// going back and forth does not grow the stack.
+    /// The screens above an open `target` close and it opens afresh in its
+    /// place, so a wizard going back and forth does not grow the stack.
     fn return_to(&mut self, target: &str) {
         let open = |s: &Screen| matches!(s, Screen::Menu(n) | Screen::Panel(n) | Screen::Input(n) if n == target);
         if let Some(i) = self.screens.iter().rposition(open) {
@@ -1124,6 +1159,31 @@ impl Engine {
                 self.close_top(true);
             }
         }
+    }
+
+    /// Gives a screen back the state it had before `open … stack` covered
+    /// it, once the layer on top of it has closed.
+    fn uncover(&mut self) {
+        if !self.covered.last().is_some_and(|c| c.depth == self.screens.len()) {
+            return;
+        }
+        let Some(c) = self.covered.pop() else { return };
+        fn put<T>(map: &mut BTreeMap<String, T>, name: &str, v: Option<T>) {
+            match v {
+                Some(v) => map.insert(name.to_string(), v),
+                None => map.remove(name),
+            };
+        }
+        let name = c.name.as_str();
+        put(&mut self.menus, name, c.menu);
+        put(&mut self.params, name, c.params);
+        put(&mut self.inputs, name, c.input);
+        put(&mut self.panel_values, name, c.panel_values);
+        put(&mut self.form_field, name, c.form_field);
+        put(&mut self.form_error, name, c.form_error);
+        self.evals.retain(|_, n| n != name);
+        self.pending.remove(name);
+        self.dirty = true;
     }
 
     fn is_final(&self, s: &Screen) -> bool {
@@ -1143,6 +1203,7 @@ impl Engine {
                     Some(Screen::Panel(name)) => self.reset_form(&name),
                     _ => {}
                 }
+                self.uncover();
                 true
             }
         }
@@ -1504,7 +1565,7 @@ impl Engine {
             }
             let mut params = BTreeMap::new();
             params.insert("matches".to_string(), matches.join("\n"));
-            if let Ok(true) = self.open(host, COMPLETE_MENU, params) {
+            if let Ok(true) = self.open(host, COMPLETE_MENU, params, false) {
                 self.completing = Some(name.to_string());
             }
         }
@@ -1663,7 +1724,7 @@ impl Engine {
                 }
             }
             Some(Hit::Input(name)) if plain(Mouse::Click) && !self.modal_open() => {
-                let _ = self.open(host, name, BTreeMap::new());
+                let _ = self.open(host, name, BTreeMap::new(), false);
                 return;
             }
             _ => {}
@@ -1713,10 +1774,15 @@ impl Engine {
         // built-in action leads to (`confirm` → an input's `then`).
         let key = self.key_env.take();
         if let Some(target) = name.strip_prefix("open ") {
-            // The same binding closes the menu it opened (M 8 ALWAYS).
-            if matches!(self.screens.last(), Some(Screen::Menu(m)) if m == target) {
+            let (target, stack) = match target.strip_suffix(" stack") {
+                Some(t) => (t, true),
+                None => (target, false),
+            };
+            // The same binding closes the menu it opened (M 8 ALWAYS);
+            // a stacking one always adds a layer.
+            if !stack && matches!(self.screens.last(), Some(Screen::Menu(m)) if m == target) {
                 self.close_top(false);
-            } else if let Err(e) = self.open(host, target, BTreeMap::new()) {
+            } else if let Err(e) = self.open(host, target, BTreeMap::new(), stack) {
                 self.report(&e);
             }
             return;
@@ -2040,10 +2106,10 @@ impl Engine {
             Action::PrevArea => self.cycle_focus(-1),
             Action::Focus(n) => self.focus_area(*n),
             Action::Nav(n) => self.nav(n),
-            Action::Open { target, args } => {
+            Action::Open { target, args, stack } => {
                 let params = self.bind_args(host, target, args, it);
                 // `open` leaves a final menu (D 11.2).
-                match self.open(host, target, params) {
+                match self.open(host, target, params, *stack) {
                     Ok(_) => {}
                     Err(e) => self.report(&e),
                 }
