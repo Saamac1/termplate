@@ -42,12 +42,15 @@ input EDITION_IN
 - var EDITION
 - kind choice
 
-> toggle flips a bool, adjust steps a number within its range.
+> toggle flips a bool, adjust steps a number within its range. Back
+> reopens the profile form (the form closed when it was confirmed);
+> confirming it again returns here, as opening a page that is already
+> open closes the pages above it instead of stacking a second copy.
 menu OPTIONS context POPUP
 - VERBOSE toggle VERBOSE
 - WORKERS adjust WORKERS 1..8
 - NEXT open THEME_PICKER
-- BACK back
+- BACK open PROFILE
 
 > A grid with a cursor (spec §5.1): the arrow keys pick a cell, Enter
 > runs PICK_THEME with the cursor in THEME_ROW and THEME_COL.

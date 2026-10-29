@@ -1081,6 +1081,7 @@ impl Engine {
     /// Opens a menu, input, panel or layout. Returns false when an empty
     /// list menu without `<MENU>.EMPTY` was not opened.
     fn open(&mut self, host: &mut dyn Host, target: &str, params: BTreeMap<String, String>) -> Result<bool, String> {
+        self.return_to(target);
         if self.model.menus.contains_key(target) {
             self.params.insert(target.to_string(), params);
             self.menus.insert(target.to_string(), MenuState::default());
@@ -1111,6 +1112,18 @@ impl Engine {
             return Err(format!("cannot open unknown `{target}`"));
         }
         Ok(true)
+    }
+
+    /// Opening a screen that is already open returns to it (spec §6): the
+    /// screens above it close and it opens afresh in its place, so a wizard
+    /// going back and forth does not grow the stack.
+    fn return_to(&mut self, target: &str) {
+        let open = |s: &Screen| matches!(s, Screen::Menu(n) | Screen::Panel(n) | Screen::Input(n) if n == target);
+        if let Some(i) = self.screens.iter().rposition(open) {
+            while self.screens.len() > i {
+                self.close_top(true);
+            }
+        }
     }
 
     fn is_final(&self, s: &Screen) -> bool {

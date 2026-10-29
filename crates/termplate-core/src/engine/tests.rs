@@ -300,6 +300,24 @@ fn modal_menu_is_drawn_with_title_on_border() {
 }
 
 #[test]
+fn opening_an_open_screen_returns_to_it() {
+    let src = "app T\n- termplate 0.1\n\nmenu A\n- NEXT open B\n- QUIT quit\n\nmenu B\n- NEXT open C\n- BACK back\n\nmenu C\n- AGAIN open B\n- BACK back\n";
+    let mut host = TestHost::new();
+    let mut e = Engine::new(model_of(src), Mode::Widget);
+    e.set_size(60, 20);
+    e.start_widget(&mut host, "A").unwrap();
+    key(&mut e, &mut host, KeyCode::Enter);
+    key(&mut e, &mut host, KeyCode::Enter);
+    assert_eq!(e.top().as_deref(), Some("C"));
+    // C opens B again: C closes instead of a second B on top
+    key(&mut e, &mut host, KeyCode::Enter);
+    assert_eq!(e.top().as_deref(), Some("B"));
+    // so back from B reaches A, not C or another B
+    key(&mut e, &mut host, KeyCode::Esc);
+    assert_eq!(e.top().as_deref(), Some("A"));
+}
+
+#[test]
 fn modal_menu_text_wraps() {
     let src = "app T\n- termplate 0.1\n- language en\n\nmenu M\n- OK quit\n\ntext en\nM.TEXT This text is longer than a menu box may grow, so it wraps between its words onto the next lines.\n";
     let mut host = TestHost::new();
