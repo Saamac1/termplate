@@ -56,16 +56,24 @@ pub struct Screen<W: Write> {
     pub sheet: StyleSheet,
     pub no_color: bool,
     prev: Option<Frame>,
+    repaint: bool,
 }
 
 impl<W: Write> Screen<W> {
     pub fn new(out: W, sheet: StyleSheet, no_color: bool) -> Self {
-        Screen { out, sheet, no_color, prev: None }
+        Screen { out, sheet, no_color, prev: None, repaint: false }
     }
 
     /// Forces a full redraw on the next [`Screen::draw`].
     pub fn invalidate(&mut self) {
         self.prev = None;
+    }
+
+    /// Rewrites every cell on the next [`Screen::draw`] without clearing
+    /// first, so it does not flicker. The terminal may have lost what we
+    /// drew (Cmd+K, other programs writing to it) without telling us.
+    pub fn repaint(&mut self) {
+        self.repaint = true;
     }
 
     fn style_of(&self, frame: &Frame, x: usize, y: usize) -> (char, Style) {
@@ -79,7 +87,10 @@ impl<W: Write> Screen<W> {
 
     pub fn draw(&mut self, frame: &Frame) -> io::Result<()> {
         let full = self.prev.as_ref().is_none_or(|p| p.width != frame.width || p.height != frame.height);
+        let all = || (0..frame.height).flat_map(|y| (0..frame.width).map(move |x| (x, y)));
+        queue!(self.out, terminal::BeginSynchronizedUpdate)?;
         let changed: Vec<(usize, usize)> = match (&self.prev, full) {
+            _ if !full && std::mem::take(&mut self.repaint) => all().collect(),
             // a cell changed when its character, role or area chain did
             (Some(prev), false) => (0..frame.height)
                 .flat_map(|y| (0..frame.width).map(move |x| (x, y)))
@@ -90,7 +101,8 @@ impl<W: Write> Screen<W> {
                 .collect(),
             _ => {
                 queue!(self.out, ResetColor, SetAttribute(Attribute::Reset), terminal::Clear(terminal::ClearType::All))?;
-                (0..frame.height).flat_map(|y| (0..frame.width).map(move |x| (x, y))).collect()
+                self.repaint = false;
+                all().collect()
             }
         };
         queue!(self.out, cursor::Hide)?;
@@ -132,6 +144,7 @@ impl<W: Write> Screen<W> {
         if let Some((x, y)) = frame.cursor {
             queue!(self.out, cursor::MoveTo(x as u16, y as u16), cursor::Show)?;
         }
+        queue!(self.out, terminal::EndSynchronizedUpdate)?;
         self.out.flush()?;
         self.prev = Some(frame.clone());
         Ok(())
@@ -307,7 +320,7 @@ mod tests {
         assert!(first.contains("\x1b[2J"), "clears the screen");
         s.out.clear();
         s.draw(&f).unwrap();
-        assert!(!text(&s.out).contains('h'), "nothing changed");
+        assert!(!text(&s.out).contains("hello"), "nothing changed");
         s.out.clear();
         f.put(4, 1, 'x', Role::Normal);
         s.draw(&f).unwrap();
@@ -326,6 +339,23 @@ mod tests {
         s.invalidate();
         s.draw(&f).unwrap();
         assert!(text(&s.out).contains("abc"));
+    }
+
+    #[test]
+    fn repaint_rewrites_everything_without_clearing() {
+        let mut s = Screen::new(Vec::new(), StyleSheet::default(), false);
+        let mut f = Frame::new(3, 1);
+        f.text(0, 0, 3, "abc", Role::Normal);
+        s.draw(&f).unwrap();
+        s.out.clear();
+        s.repaint();
+        s.draw(&f).unwrap();
+        let out = text(&s.out);
+        assert!(out.contains("abc"));
+        assert!(!out.contains("\x1b[2J"), "no clear, no flicker: {out:?}");
+        s.out.clear();
+        s.draw(&f).unwrap();
+        assert!(!text(&s.out).contains("abc"), "only once");
     }
 
     #[test]
@@ -380,7 +410,7 @@ mod tests {
         let mut f = Frame::new(4, 2);
         f.cursor = Some((2, 1));
         s.draw(&f).unwrap();
-        assert!(text(&s.out).ends_with("\x1b[2;3H\x1b[?25h"));
+        assert!(text(&s.out).ends_with("\x1b[2;3H\x1b[?25h\x1b[?2026l"));
     }
 
     fn key(code: CKey, mods: KeyModifiers) -> CEvent {

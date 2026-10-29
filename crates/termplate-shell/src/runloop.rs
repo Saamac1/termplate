@@ -19,6 +19,10 @@ static NEED_REDRAW: AtomicBool = AtomicBool::new(false);
 static MOUSE: AtomicBool = AtomicBool::new(true);
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
 
+/// How often the whole screen is rewritten: the terminal can lose what we
+/// drew (Cmd+K, other programs writing to it) without telling us.
+const REPAINT_EVERY: Duration = Duration::from_secs(1);
+
 extern "C" fn on_signal(sig: libc::c_int) {
     SIGNAL.store(sig, Ordering::SeqCst);
 }
@@ -115,7 +119,12 @@ fn event_loop(
         stdout.flush()
     };
 
+    let mut last_repaint = Instant::now();
     loop {
+        if last_repaint.elapsed() >= REPAINT_EVERY {
+            screen.repaint();
+            last_repaint = Instant::now();
+        }
         if NEED_REDRAW.swap(false, Ordering::SeqCst) {
             screen.invalidate();
             let (w, h) = terminal_size();
