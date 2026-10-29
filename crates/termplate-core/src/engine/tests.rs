@@ -300,6 +300,28 @@ fn modal_menu_is_drawn_with_title_on_border() {
 }
 
 #[test]
+fn modal_menu_text_wraps() {
+    let src = "app T\n- termplate 0.1\n- language en\n\nmenu M\n- OK quit\n\ntext en\nM.TEXT This text is longer than a menu box may grow, so it wraps between its words onto the next lines.\n";
+    let mut host = TestHost::new();
+    let mut e = Engine::new(model_of(src), Mode::Widget);
+    e.set_size(80, 20);
+    e.start_widget(&mut host, "M").unwrap();
+    let s = screen(&mut e);
+    let rows: Vec<&str> = s.lines().filter(|l| l.contains('│')).collect();
+    assert_eq!(rows.len(), 3, "two lines of text and the item: {s}");
+    assert!(rows[0].contains("│ This text is longer than a menu box may grow, so   │"), "50 columns: {s}");
+    assert!(rows[1].contains("│ it wraps between its words onto the next lines."), "{s}");
+    assert!(rows[2].contains("│ M.OK"), "{s}");
+    assert!(!s.contains('…'), "nothing is cut: {s}");
+    // a short text keeps the box narrow
+    let mut e = Engine::new(model_of(&src.replace("This text is longer than a menu box may grow, so it wraps between its words onto the next lines.", "Short.")), Mode::Widget);
+    e.set_size(80, 20);
+    e.start_widget(&mut host, "M").unwrap();
+    let s = screen(&mut e);
+    assert!(s.contains("│ Short.") && s.lines().filter(|l| l.contains('│')).count() == 2, "{s}");
+}
+
+#[test]
 fn styled_borders_for_modals_and_areas() {
     let src = APP.replace("log LOG history 50", "log LOG history 50\n\npanels\n- POPUP border double\n- LOG border ascii");
     let (mut e, mut h) = app_with(model_of(&src));

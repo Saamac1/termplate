@@ -123,6 +123,8 @@ const MAX_COMPLETIONS: usize = 200;
 /// The last row of a cut completion list.
 const MORE_ROW: &str = "…";
 const MAX_CHAIN: usize = 16;
+/// A menu's `TEXT` widens its modal up to this many columns, then wraps.
+const MENU_TEXT_WIDTH: usize = 50;
 
 /// Built-in texts; applications may override them in their texts.
 pub const BUILTIN_TEXTS: &[(&str, &str)] = &[
@@ -2474,11 +2476,13 @@ impl Engine {
             f.aligned(rect.x, y, rect.w, t, Align::Left, Role::Title);
             y += 1;
         }
-        if let Some(t) = &text
-            && y < bottom {
-                f.aligned(rect.x, y, rect.w, t, Align::Left, Role::Normal);
-                y += 1;
+        for line in text.iter().flat_map(|t| wrap(t, rect.w)) {
+            if y >= bottom {
+                break;
             }
+            f.aligned(rect.x, y, rect.w, &line, Align::Left, Role::Normal);
+            y += 1;
+        }
         let list = match &def.kind {
             MenuKind::List(l) => Some(l.clone()),
             _ => None,
@@ -2683,15 +2687,17 @@ impl Engine {
                     .map(|r| str_width(&r.label) + prefix)
                     .chain(empty.iter().map(|t| str_width(t)))
                     .chain(title.iter().map(|t| str_width(t) + 2))
-                    .chain(text.iter().map(|t| str_width(t)))
                     .chain(header.iter().map(|t| str_width(t) + prefix))
                     .max()
                     .unwrap_or(10)
                     .max(12);
-                let extra = usize::from(text.is_some()) + usize::from(header.is_some()) + usize::from(filter);
-                let rows = state.len().max(1);
+                // the text widens the box up to a limit, then wraps
+                let content_w = text.iter().map(|t| str_width(t).min(MENU_TEXT_WIDTH.max(content_w))).fold(content_w, usize::max);
                 let def_size = self.model.menus.get(name).map(|m| m.size).unwrap_or_default();
                 let bw = def_size.0.map(|d| d.resolve(w)).unwrap_or(content_w + 4).min(max_w);
+                let text_lines = text.iter().map(|t| wrap(t, bw.saturating_sub(4)).len()).sum::<usize>();
+                let extra = text_lines + usize::from(header.is_some()) + usize::from(filter);
+                let rows = state.len().max(1);
                 let bh = def_size.1.map(|d| d.resolve(h)).unwrap_or(rows + extra + 2).min(max_h);
                 let r = centered(w, h, bw, bh, depth);
                 let border = self.modal_border(&chain);

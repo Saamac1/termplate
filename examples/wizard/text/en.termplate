@@ -20,7 +20,7 @@ MAIN_MENU.UNINSTALL Uninstall
 MAIN_MENU.QUIT Quit
 KEYBAR.TEXT {^open WELCOME} wizard · {^INSTALL} install · 1-8 workers · {^quit} quit
 WELCOME.TITLE Welcome
-WELCOME.TEXT Five steps to install a demo. Esc goes back.
+WELCOME.TEXT This wizard collects a few settings in five steps and installs a demo into a folder of your choice. Enter goes on, Esc goes back a page.
 WELCOME.NEXT Next
 WELCOME.CANCEL Cancel
 PROFILE.TITLE 1/5 Profile

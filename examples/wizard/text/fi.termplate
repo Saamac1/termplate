@@ -20,7 +20,7 @@ MAIN_MENU.UNINSTALL Poista asennus
 MAIN_MENU.QUIT Lopeta
 KEYBAR.TEXT {^open WELCOME} velho · {^INSTALL} asenna · 1-8 työt · {^quit} lopeta
 WELCOME.TITLE Tervetuloa
-WELCOME.TEXT Viisi vaihetta demon asentamiseen. Esc palaa.
+WELCOME.TEXT Velho kysyy viidessä vaiheessa muutaman asetuksen ja asentaa demon valitsemaasi kansioon. Enter jatkaa, Esc palaa sivun taaksepäin.
 WELCOME.NEXT Seuraava
 WELCOME.CANCEL Peruuta
 PROFILE.TITLE 1/5 Profiili

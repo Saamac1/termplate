@@ -259,7 +259,7 @@ menu FAILED context POPUP final
 - Kohta ilman toimintoa ajaa samannimisen komennon tai sisäisen toiminnon.
 - `hide when`, `disabled when`, `adjust`, pinoutuminen, `size` ja `context` kuten RLML:ssä.
 - `final` on valikon määre (ei kohdan): `back` ja `close` eivät sulje valikkoa, ja lataus tarkistaa, että valikosta pääsee pois jollakin kohdalla.
-- Tekstit: `<VALIKKO>.TITLE`, `<VALIKKO>.TEXT`, `<VALIKKO>.<KOHTA>`.
+- Tekstit: `<VALIKKO>.TITLE`, `<VALIKKO>.TEXT`, `<VALIKKO>.<KOHTA>`. `TEXT` rivittyy sanojen välistä: modaalissa se levittää laatikkoa enintään 50 sarakkeeseen (tai kohtien leveyteen, jos ne ovat leveämpiä), asettelun alueessa alueen leveyteen.
 - Ehdot arvioidaan, kun valikko avautuu, muuttuja muuttuu, komento päättyy tai ajetaan `refresh` (komentoja sisältävät taustalla, luku 15). Tiedostojärjestelmästä riippuvat ehdot (`ok $(test -d …)`) päivittyvät siis `refresh`-toiminnolla tai paneelin päivitysvälillä, eivät ajastimella.
 
 #### 7.1 Listavalikot
