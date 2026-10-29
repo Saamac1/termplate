@@ -19,12 +19,18 @@ fn tmpdir(name: &str) -> PathBuf {
 
 /// Runs `termplate render ARGS` with `steps` on stdin, in `dir`.
 fn render(dir: &Path, args: &[&str], steps: &str) -> (i32, String, String) {
+    render_env(dir, args, steps, &[])
+}
+
+/// [`render`] with extra environment variables.
+fn render_env(dir: &Path, args: &[&str], steps: &str, env: &[(&str, &Path)]) -> (i32, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_termplate"))
         .args(["render", "--size", "70x20", "--steps", "-"])
         .args(args)
         .current_dir(dir)
         .env("LANG", "en_US.UTF-8")
         .env("XDG_CONFIG_HOME", dir.join("no-config"))
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -238,4 +244,66 @@ key q
 ";
     let (code, out, err) = render(&d, &["run", "sudoku.termplate"], steps);
     assert_eq!((code, out.as_str()), (0, "--- exit 0\n"), "{err}");
+}
+
+#[test]
+fn wizard_example() {
+    let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wizard");
+    let tmp = tmpdir("wizard");
+    // the narrow layout (70 columns): no summary, the log under the menu
+    let steps = "\
+wait
+key w
+expect Welcome
+key enter
+expect 1/5 Profile
+type Ada
+key tab
+type ada@example
+key enter
+expect Like you@example.com
+type .com
+key tab
+type secret
+key tab
+key right
+key enter
+expect 2/5 Options
+key enter
+key down
+key right
+key down
+key enter
+expect 3/5 Theme
+key right
+key down
+key enter
+wait
+expect 4/5 Folder
+key enter
+wait
+expect 5/5 Parts
+key insert
+key down
+key insert
+key enter
+wait
+expect Install pro (ember) for Ada?
+key enter
+expect Write files into the folder?
+key enter
+wait
+expect Installed into the folder.
+key down down enter
+reject Installed into the folder.
+expect State:     installed
+key ctrl+q
+";
+    let (code, out, err) = render_env(&d, &["run", "app.termplate"], steps, &[("TMPDIR", &tmp)]);
+    assert_eq!((code, out.as_str()), (0, "--- exit 0\n"), "{err}");
+    let conf = std::fs::read_to_string(tmp.join("termplate-wizard-demo/wizard.conf")).unwrap();
+    for line in ["name = Ada", "email = ada@example.com", "edition = pro", "theme = ember", "workers = 3", "verbose = true", "parts = core examples"] {
+        assert!(conf.contains(line), "{line}: {conf}");
+    }
+    assert!(!conf.contains("secret") && !conf.contains("account = none"), "the password came on stdin and was hashed: {conf}");
 }

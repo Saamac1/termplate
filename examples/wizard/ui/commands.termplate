@@ -1,0 +1,106 @@
+> Runs once when the program starts (app `- start`): the default target
+> folder under $TMPDIR.
+command INIT
+- run d=${TMPDIR:-/tmp}; printf '%s/termplate-wizard-demo' "${d%/}"
+- into TARGET
+
+> The cursor cell of the THEME grid becomes the theme's name.
+command PICK_THEME
+- env ROW=$THEME_ROW COL=$THEME_COL
+- into THEME
+- then open TARGET_DIR
+run:
+```sh
+set -- ocean forest sand berry ember mono
+shift $(( (ROW - 1) * 3 + COL - 1 ))
+printf '%s' "$1"
+```
+
+> IT is the marked rows of PARTS, one per line; keep the names only.
+command CHOOSE_PARTS
+- run printf '%s\n' "$IT" | cut -d' ' -f1
+- into PARTS
+- then open CONFIRM
+
+> The installer: its output streams into LOG with its colours, the
+> password comes on stdin (never in the environment), and the progress
+> goes to files that HEADER shows. Esc or `stop INSTALL` cancels it.
+command INSTALL
+- confirm INSTALL.CONFIRM
+- shell bash
+- env NAME=$NAME EMAIL=$EMAIL EDITION=$EDITION WORKERS=$WORKERS VERBOSE=$VERBOSE THEME=$THEME TARGET=$TARGET PARTS=$PARTS
+- secret PASSWORD stdin
+- output LOG
+- timeout 2m
+- then open DONE
+- on_error open FAILED
+run:
+```bash
+set -euo pipefail
+IFS= read -r password || true
+mkdir -p "$TARGET"
+cd "$TARGET"
+echo 0 > .progress
+echo "installing" > .state
+touch .installing
+# also when stopped: SIGTERM ends the script through the EXIT trap
+trap 'rm -f .installing; [ "$(cat .state)" = installed ] || echo stopped > .state' EXIT
+trap 'exit 143' TERM
+
+mapfile -t parts <<< "$PARTS"
+total=${#parts[@]}
+printf '\e[1mInstalling %s (%s) for %s into %s\e[0m\n' "$EDITION" "$THEME" "$NAME" "$TARGET"
+n=0
+for part in "${parts[@]}"; do
+  [ -n "$part" ] || continue
+  printf '\e[36m→\e[0m %s\n' "$part"
+  mkdir -p "$part"
+  for step in 1 2 3; do
+    sleep 0.3
+    [ "$VERBOSE" = true ] && printf '  \e[2mstep %d of 3, %d workers\e[0m\n' "$step" "$WORKERS"
+  done
+  n=$(( n + 1 ))
+  echo $(( n * 100 / total )) > .progress
+done
+if [ -z "$password" ]; then
+  echo "no password given: skipping the account" >&2
+  account=none
+else
+  account=$(printf '%s' "$password" | shasum -a 256 | cut -c1-12)
+fi
+cat > wizard.conf <<CONF
+name = $NAME
+email = $EMAIL
+edition = $EDITION
+theme = $THEME
+workers = $WORKERS
+verbose = $VERBOSE
+parts = ${parts[*]}
+account = $account
+CONF
+echo "installed" > .state
+printf '\e[32m✓ Done:\e[0m %s\n' "$TARGET/wizard.conf"
+```
+
+> `interactive` hands the whole terminal to the pager.
+command VIEW
+- env TARGET=$TARGET
+- run ${PAGER:-less} "$TARGET/wizard.conf" interactive
+
+> `window` opens a new tmux window or terminal window and does not wait;
+> without either it runs in this terminal.
+command SHELL
+- env TARGET=$TARGET
+- run cd "$TARGET" && exec "${SHELL:-sh}"
+- window tab
+
+command UNINSTALL
+- confirm UNINSTALL.CONFIRM
+- env TARGET=$TARGET PARTS=$PARTS
+- output LOG
+- run cd "$TARGET" && rm -f wizard.conf .progress .state && printf '%s\n' "$PARTS" | while read -r p; do [ -n "$p" ] && rmdir "$p" 2>/dev/null; done; echo "removed $TARGET/wizard.conf"
+
+> One command for several keys: the key pressed arrives as KEY.
+command SET_WORKERS
+- run printf '%s' "$KEY"
+- into WORKERS

@@ -1,0 +1,96 @@
+> The wizard's pages. Each one opens the next; Esc (back) returns to the
+> page below it on the stack.
+
+menu WELCOME context POPUP
+- NEXT open PROFILE
+- CANCEL close
+
+> A form (spec §8.1): Tab moves between the fields, Enter checks them
+> all and stores them at once, then the next page opens.
+panel PROFILE then open OPTIONS
+[lname_____] [name______________________]
+[lemail____] [email_____________________]
+[lpass_____] [pass______________________]
+[ledition__] [edition___________________]
+legend:
+- lname text PROFILE.NAME
+- name input NAME_IN
+- lemail text PROFILE.EMAIL
+- email input EMAIL_IN
+- lpass text PROFILE.PASSWORD
+- pass input PASSWORD_IN
+- ledition text PROFILE.EDITION
+- edition input EDITION_IN
+
+input NAME_IN
+- var NAME
+- validate $VALUE != ""
+- error PROFILE.NAME_EMPTY
+
+input EMAIL_IN
+- var EMAIL
+- validate ok $(printf '%s' "$VALUE" | grep -q '^[^@ ]*@[^@ ]*\.[^@ ]*$')
+- error PROFILE.EMAIL_BAD
+
+> A password is never echoed or logged; INSTALL gets it on stdin.
+input PASSWORD_IN
+- var PASSWORD
+- kind password
+
+> A choice field: the arrow keys change the value.
+input EDITION_IN
+- var EDITION
+- kind choice
+
+> toggle flips a bool, adjust steps a number within its range.
+menu OPTIONS context POPUP
+- VERBOSE toggle VERBOSE
+- WORKERS adjust WORKERS 1..8
+- NEXT open THEME_PICKER
+- BACK back
+
+> A grid with a cursor (spec §5.1): the arrow keys pick a cell, Enter
+> runs PICK_THEME with the cursor in THEME_ROW and THEME_COL.
+panel THEME_PICKER
+tttttttttttttttttttttttttttt
+cccccccc cccccccc cccccccc
+cccccccc cccccccc cccccccc
+
+legend:
+- t text THEME_PICKER.HINT
+- c grid $(printf '\033[36mocean\033[0m \033[32mforest\033[0m \033[33msand\033[0m\n\033[35mberry\033[0m \033[31member\033[0m \033[37mmono\033[0m') ansi cursor THEME_ROW THEME_COL then PICK_THEME
+
+> A path with completion: Tab completes, a second Tab lists the matches.
+input TARGET_DIR
+- var TARGET
+- kind path
+- validate ok $(test -d "$(dirname "$VALUE")")
+- error TARGET_DIR.INVALID
+- then open PART_LIST
+
+> A list menu with columns: type to filter, Insert marks several rows,
+> Enter goes on with the marked rows (or the row under the cursor) as IT.
+> A row's commands get the row as IT too.
+menu PART_LIST list
+- source $(printf '%s\n' "core 12" "docs 4" "examples 3" "fonts 25" "themes 1" "tools 8")
+- columns PART:14 SIZE:6 right
+- row PART: $(echo "$IT" | cut -d' ' -f1) SIZE: $(echo "$IT" | cut -d' ' -f2)
+- filter
+- multi
+- then CHOOSE_PARTS
+
+menu CONFIRM context POPUP
+- INSTALL
+- BACK back
+- CANCEL close
+
+menu DONE context POPUP
+- VIEW
+- SHELL
+- FINISH close
+
+> `final`: Esc does not close it; the user must pick an item that leaves
+> it (open or quit).
+menu FAILED context POPUP final
+- RETRY open CONFIRM
+- QUIT quit

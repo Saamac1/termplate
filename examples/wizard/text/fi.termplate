@@ -1,0 +1,67 @@
+text fi
+APP.NAME Termplate-asennusvelho
+HEADER.TITLE {@APP.NAME}
+HEADER.STATE Tila:
+SUMMARY.NAME Nimi:
+SUMMARY.EMAIL Sähköposti:
+SUMMARY.EDITION Versio:
+SUMMARY.WORKERS Työt:
+SUMMARY.VERBOSE Laaja loki:
+SUMMARY.THEME Teema:
+SUMMARY.TARGET Kansio:
+SUMMARY.PARTS Osat:
+MAIN_MENU.TITLE Valikko
+MAIN_MENU.WIZARD Asennusvelho…
+MAIN_MENU.INSTALL Asenna uudelleen
+MAIN_MENU.STOP Keskeytä asennus
+MAIN_MENU.VIEW Näytä asetukset
+MAIN_MENU.SHELL Komentotulkki kansiossa
+MAIN_MENU.UNINSTALL Poista asennus
+MAIN_MENU.QUIT Lopeta
+KEYBAR.TEXT {^open WELCOME} velho · {^INSTALL} asenna · 1-8 työt · {^quit} lopeta
+WELCOME.TITLE Tervetuloa
+WELCOME.TEXT Viisi vaihetta demon asentamiseen. Esc palaa.
+WELCOME.NEXT Seuraava
+WELCOME.CANCEL Peruuta
+PROFILE.TITLE 1/5 Profiili
+PROFILE.NAME Nimi:
+PROFILE.EMAIL Sähköposti:
+PROFILE.PASSWORD Salasana:
+PROFILE.EDITION Versio:
+PROFILE.NAME_EMPTY Anna nimi
+PROFILE.EMAIL_BAD Muotoa sinä@esimerkki.fi
+OPTIONS.TITLE 2/5 Asetukset
+OPTIONS.VERBOSE Laaja loki: {VERBOSE}
+OPTIONS.WORKERS Rinnakkaisia töitä: {WORKERS}
+OPTIONS.NEXT Seuraava
+OPTIONS.BACK Takaisin
+THEME_PICKER.TITLE 3/5 Teema
+THEME_PICKER.HINT Nuolet valitsevat, {^confirm} hyväksyy
+TARGET_DIR.TITLE 4/5 Kansio
+TARGET_DIR.PROMPT Asenna kansioon:
+TARGET_DIR.INVALID Yläkansiota ei ole
+PART_LIST.TITLE 5/5 Osat (Insert merkitsee)
+PART_LIST.PART Osa
+PART_LIST.SIZE Mt
+CONFIRM.TITLE Valmis
+CONFIRM.TEXT Asennetaanko {EDITION} ({THEME}) käyttäjälle {NAME}?
+CONFIRM.INSTALL Asenna
+CONFIRM.BACK Takaisin
+CONFIRM.CANCEL Peruuta
+INSTALL.CONFIRM Kirjoitetaanko tiedostot kansioon?
+DONE.TITLE Asennettu
+DONE.TEXT Asennettu kansioon.
+DONE.VIEW Näytä asetukset
+DONE.SHELL Avaa komentotulkki siellä
+DONE.FINISH Valmis
+FAILED.TITLE Asennus epäonnistui
+FAILED.TEXT Katso loki ja yritä uudelleen tai lopeta.
+FAILED.RETRY Yritä uudelleen
+FAILED.QUIT Lopeta
+UNINSTALL.CONFIRM Poistetaanko asennetut tiedostot?
+> Termplate's own texts can be translated too.
+TERMPLATE.CONFIRM_HINT {^confirm} OK  {^back} Peruuta
+TERMPLATE.FORM_HINT {^confirm} OK  {^back} Peruuta  Tab seuraava kenttä
+TERMPLATE.CANCELLED {NAME} keskeytetty
+TERMPLATE.FAILED Komento päättyi tilaan {STATUS}
+TERMPLATE.TOO_SMALL Pääte on liian pieni: tarvitaan {WIDTH}x{HEIGHT}

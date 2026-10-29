@@ -1,0 +1,28 @@
+> Setup wizard: a step-by-step installer that tours Termplate's features.
+> The wizard's pages are modals on a stack: Next opens the next page, Esc
+> goes back, and `close` closes them all. The installer writes only to its
+> target folder (by default under $TMPDIR).
+>
+>   termplate run examples/wizard/app.termplate
+
+app WIZARD
+- termplate 0.1
+- layout MAIN
+- language en
+- start INIT
+
+include ui/*
+include text/*
+
+vars
+- NAME text
+- EMAIL text
+- PASSWORD text
+- EDITION choice basic standard pro default standard
+- WORKERS number 2 range 1..8
+- VERBOSE bool false
+- THEME text "ocean"
+- THEME_ROW number 1 range 1..2
+- THEME_COL number 1 range 1..3
+- TARGET text
+- PARTS list

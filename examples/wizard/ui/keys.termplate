@@ -1,0 +1,30 @@
+keys ALWAYS
+- quit ctrl+q
+- refresh ctrl+r
+
+> The base context is the layout's name.
+keys MAIN
+- open WELCOME w
+- INSTALL i
+- SET_WORKERS 1 2 3 4 5 6 7 8
+
+> The wizard's pages: q goes back too; other keys reach the menu.
+keys POPUP passthrough
+- back q esc
+
+> Palette, borders and colours (spec §11). Terminal colours (`cyan`,
+> `grey`) follow the user's terminal theme.
+colors
+- ACCENT 5fafd7
+
+panels
+- HEADER border rounded fg ACCENT
+- SUMMARY border rounded
+- MAIN_MENU border rounded
+- LOG border single fg grey
+- KEYBAR fg black bg cyan
+- MENU.selected fg black bg cyan
+- POPUP border double
+
+logs
+- LOG.stderr fg yellow

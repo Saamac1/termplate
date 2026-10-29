@@ -1,0 +1,85 @@
+> The main screen in the grid form (spec §4.1): area names in a grid,
+> one size per column and row.
+layout MAIN grid
+- columns 30 *
+- rows 5 * 8 1
+
+HEADER    HEADER
+MAIN_MENU SUMMARY
+LOG       LOG
+KEYBAR    KEYBAR
+
+> A narrow terminal gets a drawn layout instead (spec §4).
+layout MAIN.narrow when width < 72
+hhhh
+mmmm
+llll
+kkkk
+
+legend:
+- h HEADER size.height 5
+- m MAIN_MENU
+- l LOG size.height 6
+- k KEYBAR size.height 1
+
+> The clock and the progress bar refresh every second; the bar and the
+> spinner read the files the installer writes.
+panel HEADER refresh 1s
+[title____________________________________] [clock_]
+[slabel__] [state_____________________________] s
+pppppppppppppppppppppppppppppppppppppppppppppppppppp
+
+legend:
+- title text HEADER.TITLE
+- clock value $(date +%H:%M:%S) right
+- slabel text HEADER.STATE
+- state value $(cat "$TARGET/.state" 2>/dev/null || echo "-")
+- s spinner when ok $(test -f "$TARGET/.installing")
+- p bar $(cat "$TARGET/.progress" 2>/dev/null || echo 0) of 100
+
+> Every value follows its variable as the wizard sets it.
+panel SUMMARY
+[lname_____] [name_____________________________]
+[lemail____] [email____________________________]
+[ledition__] [edition__________________________]
+[lworkers__] [workers__________________________]
+[lverbose__] [verbose__________________________]
+[ltheme____] [theme____________________________]
+[ltarget___] [target___________________________]
+[lparts____] ppppppppppppppppppppppppppppppppppp
+             ppppppppppppppppppppppppppppppppppp
+legend:
+- lname text SUMMARY.NAME
+- name value $NAME
+- lemail text SUMMARY.EMAIL
+- email value $EMAIL
+- ledition text SUMMARY.EDITION
+- edition value $EDITION
+- lworkers text SUMMARY.WORKERS
+- workers value $WORKERS
+- lverbose text SUMMARY.VERBOSE
+- verbose value $VERBOSE
+- ltheme text SUMMARY.THEME
+- theme value $THEME
+- ltarget text SUMMARY.TARGET
+- target value $TARGET
+- lparts text SUMMARY.PARTS
+- p value $PARTS
+
+menu MAIN_MENU
+- WIZARD open WELCOME
+- INSTALL disabled when $PARTS == ""
+- STOP stop INSTALL
+- VIEW disabled when not ok $(test -f "$TARGET/wizard.conf")
+- SHELL disabled when not ok $(test -d "$TARGET")
+- UNINSTALL disabled when not ok $(test -f "$TARGET/wizard.conf")
+- QUIT quit
+
+> Colours stay in the log (ansi keep); stderr gets its own style.
+log LOG history 500 ansi keep
+
+panel KEYBAR
+kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+
+legend:
+- k text KEYBAR.TEXT

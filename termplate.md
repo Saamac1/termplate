@@ -570,6 +570,7 @@ Ratkaistut: lomakkeet (luku 8.1), reunat ovat vain tyylissä (luku 11), widget-t
 - `examples/backup`: luvun 2–12 esimerkkisovellus.
 - `examples/filemanager`: kaksipaneelinen tiedostonhallinta Midnight Commanderin tapaan: listavalikot `filter`/`multi`/`keep`, paneelikohtaiset näppäinkontekstit, näppäinkomennot valituille riveille, `run … interactive` katseluun ja muokkaukseen.
 - `examples/sudoku`: sudoku yhdessä tiedostossa: ruudukko kursoreineen (luku 5.1), numeronäppäimet yhdellä komennolla (`KEY`, luku 9), laudan piirto käynnistyksessä (`start`, luku 2), värit arvossa (`ansi`) ja upotetut bash-skriptit (luku 6.1).
+- `examples/wizard`: asennusvelho, jonka sivut ovat modaaleja pinossa ja esittelevät kielen ominaisuudet: ruudukkomuotoinen asettelu ja kapean päätteen piirros, lomake tarkistuksineen (`password`, `choice`), `toggle` ja `adjust`, ruudukko kursoreineen, polun täydennys, listavalikko sarakkeineen ja monivalintoineen, taustalla ajettava asennus (`secret … stdin`, `stop`, edistymispalkki, `spinner`), `interactive` ja `window`, näppäin komennolle (`KEY`) sekä kaksi kieltä.
 - `examples/ollamaplate`: Ollaman käyttöliittymä: palvelin taustakomentona (`stop`), mallilista, ladatut mallit päivittyvässä paneelissa ja keskustelu asettelun syötteellä (`then`, `clear`), jonka vastaus virtaa lokiin.
 
 ### Liite A. Vastaavuus RLML:ään

@@ -1,0 +1,61 @@
+text en
+APP.NAME Termplate setup wizard
+HEADER.TITLE {@APP.NAME}
+HEADER.STATE State:
+SUMMARY.NAME Name:
+SUMMARY.EMAIL Email:
+SUMMARY.EDITION Edition:
+SUMMARY.WORKERS Workers:
+SUMMARY.VERBOSE Verbose:
+SUMMARY.THEME Theme:
+SUMMARY.TARGET Folder:
+SUMMARY.PARTS Parts:
+MAIN_MENU.TITLE Menu
+MAIN_MENU.WIZARD Setup wizard…
+MAIN_MENU.INSTALL Install again
+MAIN_MENU.STOP Stop installing
+MAIN_MENU.VIEW View settings
+MAIN_MENU.SHELL Shell in the folder
+MAIN_MENU.UNINSTALL Uninstall
+MAIN_MENU.QUIT Quit
+KEYBAR.TEXT {^open WELCOME} wizard · {^INSTALL} install · 1-8 workers · {^quit} quit
+WELCOME.TITLE Welcome
+WELCOME.TEXT Five steps to install a demo. Esc goes back.
+WELCOME.NEXT Next
+WELCOME.CANCEL Cancel
+PROFILE.TITLE 1/5 Profile
+PROFILE.NAME Name:
+PROFILE.EMAIL Email:
+PROFILE.PASSWORD Password:
+PROFILE.EDITION Edition:
+PROFILE.NAME_EMPTY Enter a name
+PROFILE.EMAIL_BAD Like you@example.com
+OPTIONS.TITLE 2/5 Options
+OPTIONS.VERBOSE Verbose log: {VERBOSE}
+OPTIONS.WORKERS Workers: {WORKERS}
+OPTIONS.NEXT Next
+OPTIONS.BACK Back
+THEME_PICKER.TITLE 3/5 Theme
+THEME_PICKER.HINT Arrows pick, {^confirm} chooses
+TARGET_DIR.TITLE 4/5 Folder
+TARGET_DIR.PROMPT Install into:
+TARGET_DIR.INVALID Its parent folder does not exist
+PART_LIST.TITLE 5/5 Parts (Insert marks)
+PART_LIST.PART Part
+PART_LIST.SIZE MB
+CONFIRM.TITLE Ready
+CONFIRM.TEXT Install {EDITION} ({THEME}) for {NAME}?
+CONFIRM.INSTALL Install
+CONFIRM.BACK Back
+CONFIRM.CANCEL Cancel
+INSTALL.CONFIRM Write files into the folder?
+DONE.TITLE Installed
+DONE.TEXT Installed into the folder.
+DONE.VIEW View settings
+DONE.SHELL Open a shell there
+DONE.FINISH Finish
+FAILED.TITLE Installation failed
+FAILED.TEXT See the log, then try again or quit.
+FAILED.RETRY Try again
+FAILED.QUIT Quit
+UNINSTALL.CONFIRM Remove the installed files?
