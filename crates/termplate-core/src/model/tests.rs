@@ -145,6 +145,48 @@ fn layout_variants_and_choice() {
     assert_eq!(m.choose_layout("MAIN", 79, 40).unwrap().name, "MAIN.narrow");
 }
 
+const GRID_LAYOUT: &str = "layout MAIN grid\n- columns 30 *\n- rows * 6\n\nSTATUS MAIN_MENU\nLOG    LOG\n\n";
+
+#[test]
+fn grid_layout_is_the_same_as_the_drawing() {
+    let rest = &LAYOUT[LAYOUT.find("panel STATUS").unwrap()..];
+    let m = ok(&format!("{GRID_LAYOUT}{rest}"));
+    let drawn = ok(LAYOUT);
+    let (g, d) = (&m.layouts["MAIN"][0], &drawn.layouts["MAIN"][0]);
+    let targets = |l: &LayoutDef| l.order.iter().map(|c| l.areas[c].clone()).collect::<Vec<_>>();
+    assert_eq!(targets(g), targets(d), "same targets, sizes and numbering order");
+    let solve = |m: &Model, l: &LayoutDef| {
+        let r = l.grid.solve(&m.area_sizes(l, 100, 30), 100, 30).rects;
+        l.order.iter().map(|c| r[c]).collect::<Vec<_>>()
+    };
+    assert_eq!(solve(&m, g), solve(&drawn, d));
+}
+
+#[test]
+fn grid_layout_spans_variants_and_sizes() {
+    let src = "layout L grid\nA B\nA C\n- columns 20% 30%\n\nlayout L.narrow grid when width < 40\nA\n\nmenu A\n- QUIT\n\nmenu B\n- QUIT\n\nmenu C\n- QUIT\n";
+    let m = ok(src);
+    let l = &m.layouts["L"][0];
+    assert_eq!(l.order.iter().map(|c| l.areas[c].target.as_str()).collect::<Vec<_>>(), ["A", "B", "C"]);
+    assert_eq!((l.areas[&l.order[0]].width, l.areas[&l.order[0]].height), (Some(Dim::Percent(20)), None));
+    assert_eq!(m.choose_layout("L", 39, 20).unwrap().name, "L.narrow");
+    assert_eq!(track_span(Some(&[Some(Dim::Cells(3)), Some(Dim::Cells(4))]), 0, 2), Some(Dim::Cells(7)));
+    assert_eq!(track_span(Some(&[Some(Dim::Cells(3)), None]), 0, 2), None);
+}
+
+#[test]
+fn grid_layout_errors() {
+    let menus = "menu A\n- QUIT\n\nmenu B\n- QUIT\n";
+    let e = |s: &str| err(&format!("{s}\n{menus}"));
+    assert!(e("layout L grid\n- colums 1 *\n\nA B\n").contains("unknown grid layout option `colums` (columns, rows)"));
+    assert!(e("layout L grid\n- columns 1\n\nA B\n").contains("`columns` gives 1 size(s) but the grid has 2 columns"));
+    assert!(e("layout L grid\nA B\nA\n").contains("same number of areas"));
+    assert!(e("layout L grid\nA B A\n").contains("area `A` is not a rectangle"));
+    assert!(e("layout L grid\nA X\n").contains("unknown panel or menu or log or input `X`"));
+    assert!(e("layout L grid\n- rows 3\n").contains("has no grid"));
+    assert!(e("layout L\n- columns 1\n").contains("a drawn layout has no items"));
+}
+
 #[test]
 fn base_layout_names() {
     assert_eq!(base_layout("MAIN"), "MAIN");

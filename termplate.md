@@ -95,6 +95,26 @@ legend:
   - Asetus `settings - area_numbers on` näyttää numeron reunallisen alueen yläreunassa.
 - **Kapea pääte:** jos pääte on asettelun piirrosta pienempi, käytetään vaihtoehtoista asettelua, jos sellainen on määritelty (`layout MAIN.narrow when width < 80`). Muuten näytetään varoitus.
 
+#### 4.1 Ruudukkomuoto
+
+Asettelun voi kirjoittaa myös alueiden nimistä koottuna ruudukkona, kun merkkipiirros on hankala (esim. asettelussa on paljon alueita tai mitat ovat tärkeämpiä kuin muoto). Ruudukkomuoto tekee saman asettelun kuin piirros ja legendi yllä:
+
+```
+layout MAIN grid
+- columns 30 *
+- rows * 6
+
+STATUS MAIN_MENU
+LOG    LOG
+```
+
+- Otsikossa on sana `grid`; vaihtoehdossa se tulee ennen ehtoa: `layout MAIN.narrow grid when width < 60`.
+- Ruudukon rivit ovat välilyönnein erotettuja alueita: paneelin, valikon, lokin tai syötteen nimi, tarvittaessa argumentteineen (`STATS($TARGET)`). Sama nimi viereisissä soluissa venyttää alueen niiden yli; alueiden on oltava suorakulmioita kuten piirroksessa. Jokaisella rivillä on yhtä monta solua, ja välilyöntejä saa käyttää tasaamiseen.
+- `- columns` antaa koon jokaiselle sarakkeelle ja `- rows` jokaiselle riville: solumäärä, prosentti tai `*` (täyttää jäljelle jäävän tilan, tasan muiden `*`-raitojen kanssa). Jos `- columns`- tai `- rows`-rivi puuttuu, kaikki sen raidat ovat `*`.
+- Useamman raidan yli venyvä alue saa raitojen summan, kun ne ovat kaikki solumääriä tai kaikki prosentteja. Muuten alue täyttää jäljelle jäävän tilan.
+- Rivit `- columns` ja `- rows` voivat olla ennen ruudukkoa (tyhjä rivi välissä sallitaan) tai heti sen jälkeen. Legendiä ei ole.
+- Alueet numeroidaan (`focus N`) lukujärjestyksessä: rivit ylhäältä alas, solut vasemmalta oikealle.
+
 ### 5. Paneelit
 
 Kuten RLML D 11.5 ja M 7.7.

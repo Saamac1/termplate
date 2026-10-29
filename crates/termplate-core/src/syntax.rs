@@ -7,6 +7,8 @@
 //! [patch|override|new] KIND NAME[(params)] [header words…]
 //! <drawing>                    (layout and panel; may follow a blank line,
 //!                               may be wrapped in a ``` fence)
+//!                               (`layout NAME grid`: the grid of area
+//!                               names may also follow the items)
 //! - [override|new|drop] item words…
 //! legend:                      (continues over blank lines until a header)
 //! - legend item words…
@@ -35,6 +37,17 @@ pub const BLOCK_KINDS: &[&str] = &[
 ];
 
 pub const DRAWING_KINDS: &[&str] = &["layout", "panel"];
+
+/// `layout NAME grid …` (spec §4.1): its grid of area names may come before
+/// or after the `- columns` and `- rows` items.
+fn is_grid_layout(b: &RawBlock) -> bool {
+    b.kind == "layout" && b.args.first().is_some_and(|t| t.is("grid"))
+}
+
+/// A drawing block that may still take its drawing.
+fn drawing_pending(b: &RawBlock) -> bool {
+    DRAWING_KINDS.contains(&b.kind.as_str()) && b.drawing.is_empty() && (b.items.is_empty() || is_grid_layout(b))
+}
 
 /// Unnamed sections: rows from every file merge by row key (D 4.8).
 pub const SECTION_KINDS: &[&str] = &["vars", "colors", "settings", "panels", "logs"];
@@ -322,8 +335,13 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
                     current.as_mut().unwrap().has_legend = true;
                     continue;
                 }
-                current.as_mut().unwrap().drawing.push(line.trim_end().to_string());
-                continue;
+                if trimmed.starts_with("- ") && current.as_ref().is_some_and(is_grid_layout) {
+                    // the grid's items follow it
+                    state = State::Body;
+                } else {
+                    current.as_mut().unwrap().drawing.push(line.trim_end().to_string());
+                    continue;
+                }
             }
             _ => {}
         }
@@ -355,11 +373,7 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
         if trimmed.is_empty() {
             state = match state {
                 State::Legend => State::Legend,
-                State::Body
-                    if current.as_ref().is_some_and(|b| DRAWING_KINDS.contains(&b.kind.as_str()) && b.drawing.is_empty() && b.items.is_empty()) =>
-                {
-                    State::AwaitDrawing
-                }
+                State::Body if current.as_ref().is_some_and(drawing_pending) => State::AwaitDrawing,
                 State::AwaitDrawing => State::AwaitDrawing,
                 State::Outside => State::Outside,
                 _ => State::Closed,
@@ -377,7 +391,7 @@ pub fn parse(file: &str, src: &str) -> Result<ParsedFile, Vec<LoadError>> {
             && trimmed != "-"
             && trimmed != "legend:"
             && header_kind(line).is_none()
-            && current.as_ref().is_some_and(|b| DRAWING_KINDS.contains(&b.kind.as_str()) && b.drawing.is_empty() && b.items.is_empty())
+            && current.as_ref().is_some_and(drawing_pending)
         {
             let b = current.as_mut().unwrap();
             b.drawing_line = lineno;
@@ -728,6 +742,19 @@ mod tests {
         let b = &blocks("panel P\n\nab\n\nlegend:\n- a value $A\n")[0];
         assert_eq!(b.drawing, ["ab"]);
         assert_eq!(b.drawing_line, 3);
+    }
+
+    #[test]
+    fn grid_layout_takes_its_grid_before_or_after_items() {
+        let b = &blocks("layout MAIN grid\n- columns 30 *\n- rows * 6\n\nSTATUS MAIN_MENU\nLOG LOG\n")[0];
+        assert_eq!(b.items.len(), 2);
+        assert_eq!(b.drawing, ["STATUS MAIN_MENU", "LOG LOG"]);
+        assert_eq!(b.drawing_line, 5);
+        let b = &blocks("layout MAIN grid\nSTATUS MAIN_MENU\nLOG LOG\n- columns 30 *\n")[0];
+        assert_eq!(b.drawing, ["STATUS MAIN_MENU", "LOG LOG"]);
+        assert_eq!(b.items.len(), 1);
+        // other blocks still end at the blank line after their items
+        assert!(errs("panel P\n- x\n\nab\n")[0].message.contains("unknown block kind"));
     }
 
     #[test]

@@ -845,10 +845,13 @@ fn parse_named(bld: &mut Builder, item: &RawItem, from: usize, to: usize) -> Vec
 fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
     let base = base_layout(&b.name).to_string();
     let is_variant = base != b.name;
-    let when = if b.args.is_empty() {
+    let grid_form = b.args.first().is_some_and(|t| t.is("grid"));
+    let args = &b.args[grid_form as usize..];
+    let args_text = if grid_form { b.args_text.trim_start().trim_start_matches("grid") } else { &b.args_text };
+    let when = if args.is_empty() {
         None
-    } else if b.args[0].is("when") && is_variant {
-        match SizeCond::parse(b.args_text.trim_start_matches("when").trim()) {
+    } else if args[0].is("when") && is_variant {
+        match SizeCond::parse(args_text.trim().trim_start_matches("when").trim()) {
             Ok(c) => Some(c),
             Err(e) => {
                 bld.err(b.err(e));
@@ -856,9 +859,19 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
             }
         }
     } else {
-        bld.err(b.err(format!("unexpected `{}` in layout header (variants use `layout NAME.variant when …`)", b.args_text)));
+        bld.err(b.err(format!("unexpected `{}` in layout header (variants use `layout NAME.variant when …`)", args_text.trim())));
         None
     };
+    if grid_form {
+        let (grid, areas, order, dims) = build_grid_areas(bld, b)?;
+        if let Err(e) = grid.check_conflicts(&dims) {
+            bld.err(b.err(e));
+        }
+        return Some(LayoutDef { name: b.name.clone(), base, when, grid, areas, order });
+    }
+    if !b.items.is_empty() {
+        bld.err(b.items[0].err("a drawn layout has no items (`layout NAME grid` takes `- columns` and `- rows`)"));
+    }
     let grid = match analyze(&b.drawing) {
         Ok(g) => g,
         Err(e) => {
@@ -941,6 +954,132 @@ fn build_layout(bld: &mut Builder, b: &RawBlock) -> Option<LayoutDef> {
         bld.err(b.err(e));
     }
     Some(LayoutDef { name: b.name.clone(), base, when, grid, areas, order })
+}
+
+/// Characters standing for the named areas of a grid layout in its [`Grid`].
+const GRID_AREA_CHARS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/// `layout NAME grid` (spec §4.1): rows of area names, a name repeated
+/// over neighbouring cells spans them, and `- columns` / `- rows` give one
+/// size per grid column and row. It becomes the same [`Grid`] as a drawing
+/// with one drawing cell per grid cell.
+#[allow(clippy::type_complexity)]
+fn build_grid_areas(bld: &mut Builder, b: &RawBlock) -> Option<(Grid, BTreeMap<char, AreaDef>, Vec<char>, Dims)> {
+    if b.has_legend {
+        bld.err(b.err("a grid layout names its areas in the grid and has no legend"));
+    }
+    let (mut columns, mut rows): (Option<Vec<Option<Dim>>>, Option<Vec<Option<Dim>>>) = (None, None);
+    for item in &b.items {
+        let slot = match item.key() {
+            "columns" => &mut columns,
+            "rows" => &mut rows,
+            k => {
+                bld.err(item.err(format!("unknown grid layout option `{k}` (columns, rows)")));
+                continue;
+            }
+        };
+        match item.tokens[1..].iter().map(|t| Dim::parse(&t.text)).collect::<Result<Vec<_>, _>>() {
+            Ok(d) if d.is_empty() => bld.err(item.err(format!("`{}` needs a size per grid track (N, N% or *)", item.key()))),
+            Ok(d) => {
+                if slot.replace(d).is_some() {
+                    bld.err(item.err(format!("duplicate `{}`", item.key())));
+                }
+            }
+            Err(e) => bld.err(item.err(e)),
+        }
+    }
+    if b.drawing.is_empty() {
+        bld.err(b.err("grid layout has no grid (rows of area names)"));
+        return None;
+    }
+    // distinct cell texts in reading order, and the row of each one's first cell
+    let mut names: Vec<(String, usize)> = Vec::new();
+    let mut drawing = Vec::new();
+    for (y, line) in b.drawing.iter().enumerate() {
+        let mut row = String::new();
+        for cell in split_top_level(line.trim(), ' ').into_iter().map(str::trim).filter(|c| !c.is_empty()) {
+            let i = names.iter().position(|(n, _)| n == cell).unwrap_or_else(|| {
+                names.push((cell.to_string(), y));
+                names.len() - 1
+            });
+            let Some(ch) = GRID_AREA_CHARS.chars().nth(i) else {
+                bld.err(b.err(format!("a grid layout has at most {} areas", GRID_AREA_CHARS.len())));
+                return None;
+            };
+            row.push(ch);
+        }
+        drawing.push(row);
+    }
+    let line_of = |y: usize| b.drawing_line.max(b.line) + y;
+    let named = |msg: String| {
+        names.iter().zip(GRID_AREA_CHARS.chars()).fold(msg, |m, ((n, _), c)| m.replace(&format!("`{c}`"), &format!("`{n}`")))
+    };
+    if let Some(y) = drawing.iter().position(|r| r.chars().count() != drawing[0].chars().count()) {
+        bld.err(LoadError::new(&b.file, line_of(y), "every grid row must have the same number of areas"));
+        return None;
+    }
+    let grid = match analyze(&drawing) {
+        Ok(g) => g,
+        Err(e) => {
+            bld.err(LoadError::new(&b.file, line_of(0), named(e)));
+            return None;
+        }
+    };
+    for (what, sizes, n) in [("columns", &columns, grid.width), ("rows", &rows, grid.height)] {
+        if let Some(s) = sizes
+            && s.len() != n {
+                bld.err(b.err(format!("`{what}` gives {} size(s) but the grid has {n} {what}", s.len())));
+                return None;
+            }
+    }
+    let mut areas = BTreeMap::new();
+    let mut order = Vec::new();
+    let mut dims = Dims::new();
+    for ((cell, y), ch) in names.iter().zip(GRID_AREA_CHARS.chars()) {
+        let item = match RawItem::new(&b.file, line_of(*y), b.namespace.clone(), cell) {
+            Ok(item) => item,
+            Err(e) => {
+                bld.err(e);
+                continue;
+            }
+        };
+        let (target_name, arg_text) = match split_call(cell) {
+            Ok(x) => x,
+            Err(e) => {
+                bld.err(item.err(e));
+                continue;
+            }
+        };
+        let target = bld.resolve(&item, target_name, &["panel", "menu", "log", "input"]).unwrap_or_default();
+        let args = arg_text.map(|a| parse_args(bld, &item, a)).unwrap_or_default();
+        if !target.is_empty() {
+            check_args(bld, &item, &target, &args);
+        }
+        let r = grid.areas[&ch];
+        let width = track_span(columns.as_deref(), r.x, r.w);
+        let height = track_span(rows.as_deref(), r.y, r.h);
+        dims.insert(ch, (width, height));
+        areas.insert(ch, AreaDef { target, args, width, height });
+        order.push(ch);
+    }
+    Some((grid, areas, order, dims))
+}
+
+/// The size of an area spanning grid tracks `from..from + len`: their sum
+/// when all are cells or all percentages, otherwise it fills.
+fn track_span(sizes: Option<&[Option<Dim>]>, from: usize, len: usize) -> Option<Dim> {
+    let spanned = sizes?.get(from..from + len)?;
+    match spanned.iter().copied().collect::<Option<Vec<Dim>>>()?.as_slice() {
+        [one] => Some(*one),
+        many if many.iter().all(|d| matches!(d, Dim::Cells(_))) => {
+            Some(Dim::Cells(many.iter().map(|d| if let Dim::Cells(n) = d { *n } else { 0 }).sum()))
+        }
+        many if many.iter().all(|d| matches!(d, Dim::Percent(_))) => {
+            let p: usize = many.iter().map(|d| if let Dim::Percent(p) = d { *p as usize } else { 0 }).sum();
+            Some(Dim::Percent(p.min(100) as u8))
+        }
+        _ => None,
+    }
 }
 
 /// Splits a trailing alignment word off `tokens[from..]`.
